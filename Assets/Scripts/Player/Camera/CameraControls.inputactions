@@ -1,0 +1,54 @@
+{
+    "name": "CameraControls",
+    "maps": [
+        {
+            "name": "Mouse",
+            "id": "ec46d680-46d0-475a-a72f-6a1531314ca4",
+            "actions": [
+                {
+                    "name": "MouseLook",
+                    "type": "PassThrough",
+                    "id": "1dd76a3c-ae56-44a3-b7ad-4731053a431d",
+                    "expectedControlType": "Vector2",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": true
+                },
+                {
+                    "name": "MouseZoom",
+                    "type": "PassThrough",
+                    "id": "86895647-01be-4a34-a4ff-bf4098baa397",
+                    "expectedControlType": "Axis",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
+                }
+            ],
+            "bindings": [
+                {
+                    "name": "",
+                    "id": "4427d28c-43f0-4d91-b864-267b262be387",
+                    "path": "<Mouse>/delta",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "MouseLook",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "cce26d25-7d44-41ae-a59e-3446cb33f97d",
+                    "path": "<Mouse>/scroll/y",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "MouseZoom",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                }
+            ]
+        }
+    ],
+    "controlSchemes": []
+}
