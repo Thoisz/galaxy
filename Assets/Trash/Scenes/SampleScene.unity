@@ -3889,7 +3889,7 @@ MonoBehaviour:
   m_TargetGraphic: {fileID: 66724683}
   m_HandleRect: {fileID: 66724682}
   m_Direction: 0
-  m_Value: 0
+  m_Value: 1
   m_Size: 0.9999999
   m_NumberOfSteps: 0
   m_OnValueChanged:
@@ -9170,8 +9170,9 @@ MonoBehaviour:
     - Increases movement speed by 100%
   itemsContainer: {fileID: 1802929965}
   equipItemCardPrefabC: {fileID: 6072740933410521139, guid: 2e68883e387e53640ac45659014f64dc, type: 3}
-  equipItemCardPrefabR: {fileID: 6072740933410521139, guid: 2e68883e387e53640ac45659014f64dc, type: 3}
-  equipItemCardPrefabLM: {fileID: 5440300916641353498, guid: c575dcbf3fbe0a64bb97ede156ededbf, type: 3}
+  equipItemCardPrefabR: {fileID: 6072740933410521139, guid: c4e881d950cf32041b182bd44b96bc9a, type: 3}
+  equipItemCardPrefabL: {fileID: 5440300916641353498, guid: c575dcbf3fbe0a64bb97ede156ededbf, type: 3}
+  equipItemCardPrefabM: {fileID: 5440300916641353498, guid: 90a445f87bd428e4bab4142aaa8497ae, type: 3}
   filterDropdown: {fileID: 1261656830}
   searchInputField: {fileID: 1535262501}
   itemsScrollRect: {fileID: 584597388}
@@ -9218,10 +9219,10 @@ MonoBehaviour:
   commonColor: {r: 0, g: 0.6272278, b: 1, a: 1}
   rareColor: {r: 1, g: 0.6455746, b: 0, a: 1}
   legendColor: {r: 0.86462384, g: 0.39716092, b: 0.990566, a: 1}
-  mythicalBaseColor: {r: 1, g: 1, b: 1, a: 1}
   itemDetailPanelC: {fileID: 0}
   itemDetailPanelR: {fileID: 0}
-  itemDetailPanelLM: {fileID: 0}
+  itemDetailPanelL: {fileID: 0}
+  itemDetailPanelM: {fileID: 0}
   detailPanelBackground: {fileID: 1219706421}
   detailPanel3DContainer: {fileID: 1135523247}
   detailItemName: {fileID: 1251287710}
@@ -13897,7 +13898,7 @@ MonoBehaviour:
   m_TargetGraphic: {fileID: 2107139337}
   m_HandleRect: {fileID: 2107139336}
   m_Direction: 2
-  m_Value: 0
+  m_Value: 1
   m_Size: 1
   m_NumberOfSteps: 0
   m_OnValueChanged:

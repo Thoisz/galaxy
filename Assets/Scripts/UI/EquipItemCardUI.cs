@@ -1,7 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
-using System.Collections;
 
 public class EquipItemCardUI : MonoBehaviour
 {
@@ -9,14 +8,9 @@ public class EquipItemCardUI : MonoBehaviour
     public Button cardButton;
     public Transform model3DContainer; // Where the 3D model will be placed (for static image)
     
-    [Header("Mythical Animation")]
-    public float rainbowSpeed = 2f;
-    public float shimmerSpeed = 1f;
-    
     private EquipableItem associatedItem;
     private EquipmentManager equipmentManager;
     private GameObject instantiated3DModel;
-    private bool isMythical = false;
     private bool isDetailPanelOpen = false;
     
     public void SetupItemCard(EquipableItem item, EquipmentManager manager)
@@ -42,24 +36,15 @@ public class EquipItemCardUI : MonoBehaviour
     {
         Color targetColor = equipmentManager.GetItemRarityColor(associatedItem.rarity);
         
-        if (associatedItem.rarity == EquipmentRarity.Mythical)
+        // Apply rarity color to button and disable hover effects for all rarities
+        if (cardButton != null)
         {
-            isMythical = true;
-            StartCoroutine(AnimateRainbowEffect());
-        }
-        else
-        {
-            isMythical = false;
-            // Apply rarity color to button and disable hover effects
-            if (cardButton != null)
-            {
-                ColorBlock colors = cardButton.colors;
-                colors.normalColor = targetColor;
-                colors.highlightedColor = targetColor; // Same as normal (no hover effect)
-                colors.selectedColor = targetColor;    // Same as normal
-                colors.pressedColor = targetColor * 0.8f; // Slightly darker when pressed
-                cardButton.colors = colors;
-            }
+            ColorBlock colors = cardButton.colors;
+            colors.normalColor = targetColor;
+            colors.highlightedColor = targetColor; // Same as normal (no hover effect)
+            colors.selectedColor = targetColor;    // Same as normal
+            colors.pressedColor = targetColor * 0.8f; // Slightly darker when pressed
+            cardButton.colors = colors;
         }
     }
     
@@ -78,29 +63,6 @@ public class EquipItemCardUI : MonoBehaviour
             // This is where you'd set up the model for image capture
             // For now, we'll leave this empty and use placeholder images
             Debug.Log($"Would setup 3D model image for {associatedItem.itemName}");
-        }
-    }
-    
-    IEnumerator AnimateRainbowEffect()
-    {
-        while (isMythical && cardButton != null)
-        {
-            float hue = (Time.time * rainbowSpeed) % 1f;
-            Color rainbowColor = Color.HSVToRGB(hue, 1f, 1f);
-            
-            // Add shimmer effect
-            float shimmer = Mathf.Sin(Time.time * shimmerSpeed) * 0.3f + 0.7f;
-            rainbowColor.a = shimmer;
-            
-            // Apply to button and disable hover for mythical too
-            ColorBlock colors = cardButton.colors;
-            colors.normalColor = rainbowColor;
-            colors.highlightedColor = rainbowColor; // No hover effect
-            colors.selectedColor = rainbowColor;
-            colors.pressedColor = rainbowColor * 0.8f;
-            cardButton.colors = colors;
-            
-            yield return null;
         }
     }
     

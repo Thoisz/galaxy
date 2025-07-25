@@ -52,7 +52,8 @@ public class EquipmentManager : MonoBehaviour
     public Transform itemsContainer; // The Content object of the ScrollView
     public GameObject equipItemCardPrefabC; // Common rarity prefab
     public GameObject equipItemCardPrefabR; // Rare rarity prefab
-    public GameObject equipItemCardPrefabLM; // Legend/Mythical rarity prefab
+    public GameObject equipItemCardPrefabL; // Legend rarity prefab
+    public GameObject equipItemCardPrefabM; // Mythical rarity prefab
     public TMP_Dropdown filterDropdown;
     public TMP_InputField searchInputField;
     public ScrollRect itemsScrollRect;
@@ -67,12 +68,12 @@ public class EquipmentManager : MonoBehaviour
     public Color commonColor = Color.blue;
     public Color rareColor = new Color(1f, 0.5f, 0f); // Orange
     public Color legendColor = Color.magenta;
-    public Color mythicalBaseColor = Color.white;
     
     [Header("Detail Panel References")]
     public GameObject itemDetailPanelC; // Common rarity detail panel
     public GameObject itemDetailPanelR; // Rare rarity detail panel
-    public GameObject itemDetailPanelLM; // Legend/Mythical rarity detail panel
+    public GameObject itemDetailPanelL; // Legend rarity detail panel
+    public GameObject itemDetailPanelM; // Mythical rarity detail panel
     public Image detailPanelBackground; // The background image of the detail panel
     public Transform detailPanel3DContainer; // Where to show the 3D model
     public TextMeshProUGUI detailItemName;
@@ -122,8 +123,10 @@ public class EquipmentManager : MonoBehaviour
             itemDetailPanelC.SetActive(false);
         if (itemDetailPanelR != null)
             itemDetailPanelR.SetActive(false);
-        if (itemDetailPanelLM != null)
-            itemDetailPanelLM.SetActive(false);
+        if (itemDetailPanelL != null)
+            itemDetailPanelL.SetActive(false);
+        if (itemDetailPanelM != null)
+            itemDetailPanelM.SetActive(false);
     }
     
     void SetupEquipPanelCloseButton()
@@ -352,8 +355,10 @@ public class EquipmentManager : MonoBehaviour
             itemDetailPanelC.SetActive(false);
         if (itemDetailPanelR != null)
             itemDetailPanelR.SetActive(false);
-        if (itemDetailPanelLM != null)
-            itemDetailPanelLM.SetActive(false);
+        if (itemDetailPanelL != null)
+            itemDetailPanelL.SetActive(false);
+        if (itemDetailPanelM != null)
+            itemDetailPanelM.SetActive(false);
     }
     
     void UpdateAllCardStates()
@@ -470,7 +475,8 @@ public class EquipmentManager : MonoBehaviour
             case EquipmentRarity.Legend:
                 return legendColor;
             case EquipmentRarity.Mythical:
-                return mythicalBaseColor;
+                // Don't apply any color - leave texture alone
+                return Color.white; // White = no tint, shows original texture
             default:
                 return commonColor;
         }
@@ -491,8 +497,9 @@ public class EquipmentManager : MonoBehaviour
             case EquipmentRarity.Rare:
                 return equipItemCardPrefabR;
             case EquipmentRarity.Legend:
+                return equipItemCardPrefabL;
             case EquipmentRarity.Mythical:
-                return equipItemCardPrefabLM;
+                return equipItemCardPrefabM;
             default:
                 return equipItemCardPrefabC; // Fallback to common
         }
@@ -507,8 +514,9 @@ public class EquipmentManager : MonoBehaviour
             case EquipmentRarity.Rare:
                 return itemDetailPanelR;
             case EquipmentRarity.Legend:
+                return itemDetailPanelL;
             case EquipmentRarity.Mythical:
-                return itemDetailPanelLM;
+                return itemDetailPanelM;
             default:
                 return itemDetailPanelC; // Fallback to common
         }
