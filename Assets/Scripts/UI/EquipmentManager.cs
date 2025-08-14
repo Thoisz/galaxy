@@ -54,6 +54,7 @@ public class EquipmentManager : MonoBehaviour
     public GameObject equipItemCardPrefabR; // Rare rarity prefab
     public GameObject equipItemCardPrefabL; // Legend rarity prefab
     public GameObject equipItemCardPrefabM; // Mythical rarity prefab
+    public GameObject rainbowBackgroundPrefab; // Standalone rainbow background prefab
     public TMP_Dropdown filterDropdown;
     public TMP_InputField searchInputField;
     public ScrollRect itemsScrollRect;
@@ -63,11 +64,6 @@ public class EquipmentManager : MonoBehaviour
     public EquipableItem equippedMeleeWeapon;
     public EquipableItem equippedRangedWeapon;
     public EquipableItem equippedAccessory;
-    
-    [Header("Rarity Colors")]
-    public Color commonColor = Color.blue;
-    public Color rareColor = new Color(1f, 0.5f, 0f); // Orange
-    public Color legendColor = Color.magenta;
     
     [Header("Detail Panel References")]
     public GameObject itemDetailPanelC; // Common rarity detail panel
@@ -82,6 +78,7 @@ public class EquipmentManager : MonoBehaviour
     
     private List<EquipableItem> filteredItems;
     private List<GameObject> currentItemCards = new List<GameObject>();
+    private List<GameObject> currentRainbowBackgrounds = new List<GameObject>(); // Track rainbow backgrounds
     private EquipableItem currentDetailItem; // Track which item's detail is open
     
     void Start()
@@ -139,12 +136,8 @@ public class EquipmentManager : MonoBehaviour
     
     void CloseEquipPanel()
     {
-        // Close the entire menu system instead of going back to tab selection
-        MenuManager menuManager = FindObjectOfType<MenuManager>();
-        if (menuManager != null)
-        {
-            menuManager.CloseMenu(); // This closes everything
-        }
+        // The MenuManager's close button will handle closing
+        // No interference with MenuManager - let it handle all menu state
     }
     
     void OnFilterChanged(int filterIndex)
@@ -191,18 +184,78 @@ public class EquipmentManager : MonoBehaviour
     {
         for (int i = 0; i < filteredItems.Count; i++)
         {
-            // Get the correct prefab based on rarity
             GameObject prefabToUse = GetPrefabForRarity(filteredItems[i].rarity);
             
-            GameObject itemCard = Instantiate(prefabToUse, itemsContainer);
-            EquipItemCardUI itemCardUI = itemCard.GetComponent<EquipItemCardUI>();
-            
-            if (itemCardUI != null)
+            // For mythical items, create a wrapper to hold both background and button
+            if (filteredItems[i].rarity == EquipmentRarity.Mythical && rainbowBackgroundPrefab != null)
             {
-                itemCardUI.SetupItemCard(filteredItems[i], this);
+                // Create wrapper GameObject
+                GameObject wrapper = new GameObject("MythicalWrapper");
+                wrapper.transform.SetParent(itemsContainer, false); // Important: worldPositionStays = false
+                
+                // Add RectTransform first
+                RectTransform wrapperRect = wrapper.AddComponent<RectTransform>();
+                
+                // Copy layout properties from your button prefab
+                RectTransform buttonRect = prefabToUse.GetComponent<RectTransform>();
+                if (buttonRect != null)
+                {
+                    wrapperRect.sizeDelta = buttonRect.sizeDelta;
+                    
+                    // Copy anchor settings
+                    wrapperRect.anchorMin = buttonRect.anchorMin;
+                    wrapperRect.anchorMax = buttonRect.anchorMax;
+                    wrapperRect.pivot = buttonRect.pivot;
+                }
+                
+                // Add LayoutElement AFTER setting up RectTransform
+                LayoutElement layoutElement = wrapper.AddComponent<LayoutElement>();
+                if (buttonRect != null)
+                {
+                    layoutElement.preferredWidth = buttonRect.sizeDelta.x;
+                    layoutElement.preferredHeight = buttonRect.sizeDelta.y;
+                }
+                
+                // Create rainbow background as child of wrapper
+                GameObject rainbowBG = Instantiate(rainbowBackgroundPrefab, wrapper.transform);
+                RectTransform rainbowRect = rainbowBG.GetComponent<RectTransform>();
+                rainbowRect.anchorMin = Vector2.zero;
+                rainbowRect.anchorMax = Vector2.one;
+                rainbowRect.anchoredPosition = Vector2.zero;
+                rainbowRect.sizeDelta = Vector2.zero;
+                
+                // Create button as child of wrapper
+                GameObject itemCard = Instantiate(prefabToUse, wrapper.transform);
+                RectTransform cardRect = itemCard.GetComponent<RectTransform>();
+                cardRect.anchorMin = Vector2.zero;
+                cardRect.anchorMax = Vector2.one;
+                cardRect.anchoredPosition = Vector2.zero;
+                cardRect.sizeDelta = Vector2.zero;
+                
+                // Setup the card
+                EquipItemCardUI itemCardUI = itemCard.GetComponent<EquipItemCardUI>();
+                if (itemCardUI != null)
+                {
+                    itemCardUI.SetupItemCard(filteredItems[i], this);
+                    itemCardUI.SetRainbowBackground(rainbowBG);
+                }
+                
+                currentRainbowBackgrounds.Add(rainbowBG);
+                currentItemCards.Add(wrapper); // Track the wrapper, not the individual card
             }
-            
-            currentItemCards.Add(itemCard);
+            else
+            {
+                // Normal items (non-mythical)
+                GameObject itemCard = Instantiate(prefabToUse, itemsContainer);
+                EquipItemCardUI itemCardUI = itemCard.GetComponent<EquipItemCardUI>();
+                
+                if (itemCardUI != null)
+                {
+                    itemCardUI.SetupItemCard(filteredItems[i], this);
+                }
+                
+                currentItemCards.Add(itemCard);
+            }
         }
         
         // Reset scroll to top
@@ -217,6 +270,12 @@ public class EquipmentManager : MonoBehaviour
             Destroy(card);
         }
         currentItemCards.Clear();
+        
+        foreach (GameObject rainbowBG in currentRainbowBackgrounds)
+        {
+            Destroy(rainbowBG);
+        }
+        currentRainbowBackgrounds.Clear();
     }
     
     public void EquipItem(EquipableItem item)
@@ -300,13 +359,6 @@ public class EquipmentManager : MonoBehaviour
         {
             currentDetailPanel.SetActive(true);
             
-            // Color the detail panel based on item rarity
-            if (detailPanelBackground != null)
-            {
-                Color rarityColor = GetRarityColor(item.rarity);
-                detailPanelBackground.color = rarityColor;
-            }
-            
             // Populate detail panel with item info
             if (detailItemName != null)
                 detailItemName.text = item.itemName;
@@ -366,7 +418,14 @@ public class EquipmentManager : MonoBehaviour
         // Update all item cards to reflect which one has detail panel open
         foreach (GameObject cardObj in currentItemCards)
         {
+            // For mythical items, the cardObj is the wrapper, so we need to find the actual card inside
             EquipItemCardUI cardUI = cardObj.GetComponent<EquipItemCardUI>();
+            if (cardUI == null && cardObj.name == "MythicalWrapper")
+            {
+                // This is a mythical wrapper, find the card UI inside
+                cardUI = cardObj.GetComponentInChildren<EquipItemCardUI>();
+            }
+            
             if (cardUI != null)
             {
                 bool isThisCardOpen = (currentDetailItem != null && cardUI.GetAssociatedItem() == currentDetailItem);
@@ -462,30 +521,6 @@ public class EquipmentManager : MonoBehaviour
         //     category = EquipmentCategory.Accessory, 
         //     rarity = EquipmentRarity.Common
         // });
-    }
-    
-    Color GetRarityColor(EquipmentRarity rarity)
-    {
-        switch (rarity)
-        {
-            case EquipmentRarity.Common:
-                return commonColor;
-            case EquipmentRarity.Rare:
-                return rareColor;
-            case EquipmentRarity.Legend:
-                return legendColor;
-            case EquipmentRarity.Mythical:
-                // Don't apply any color - leave texture alone
-                return Color.white; // White = no tint, shows original texture
-            default:
-                return commonColor;
-        }
-    }
-    
-    // Public method so item cards can get the correct color
-    public Color GetItemRarityColor(EquipmentRarity rarity)
-    {
-        return GetRarityColor(rarity);
     }
     
     GameObject GetPrefabForRarity(EquipmentRarity rarity)

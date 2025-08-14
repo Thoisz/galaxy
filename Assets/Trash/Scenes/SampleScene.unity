@@ -3889,7 +3889,7 @@ MonoBehaviour:
   m_TargetGraphic: {fileID: 66724683}
   m_HandleRect: {fileID: 66724682}
   m_Direction: 0
-  m_Value: 1
+  m_Value: 0
   m_Size: 0.9999999
   m_NumberOfSteps: 0
   m_OnValueChanged:
@@ -9173,6 +9173,7 @@ MonoBehaviour:
   equipItemCardPrefabR: {fileID: 6072740933410521139, guid: c4e881d950cf32041b182bd44b96bc9a, type: 3}
   equipItemCardPrefabL: {fileID: 5440300916641353498, guid: c575dcbf3fbe0a64bb97ede156ededbf, type: 3}
   equipItemCardPrefabM: {fileID: 5440300916641353498, guid: 90a445f87bd428e4bab4142aaa8497ae, type: 3}
+  rainbowBackgroundPrefab: {fileID: 0}
   filterDropdown: {fileID: 1261656830}
   searchInputField: {fileID: 1535262501}
   itemsScrollRect: {fileID: 584597388}
@@ -9216,9 +9217,6 @@ MonoBehaviour:
     healthBonus: 0
     staminaBonus: 0
     specialAbilities: []
-  commonColor: {r: 0, g: 0.6272278, b: 1, a: 1}
-  rareColor: {r: 1, g: 0.6455746, b: 0, a: 1}
-  legendColor: {r: 0.86462384, g: 0.39716092, b: 0.990566, a: 1}
   itemDetailPanelC: {fileID: 0}
   itemDetailPanelR: {fileID: 0}
   itemDetailPanelL: {fileID: 0}
@@ -9906,7 +9904,7 @@ MonoBehaviour:
   settingsTabButton: {fileID: 908426702}
   menuOpenButton: {fileID: 1529434826}
   menuCloseButton: {fileID: 1040750667}
-  menuKey: 9
+  menuKey: 98
   animationDuration: 0.4
   offScreenOffset: 205
   slideCurve:
@@ -13898,7 +13896,7 @@ MonoBehaviour:
   m_TargetGraphic: {fileID: 2107139337}
   m_HandleRect: {fileID: 2107139336}
   m_Direction: 2
-  m_Value: 1
+  m_Value: 0
   m_Size: 1
   m_NumberOfSteps: 0
   m_OnValueChanged:

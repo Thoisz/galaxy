@@ -20,31 +20,41 @@ public class MenuManager : MonoBehaviour
     [Header("Menu Controls")]
     public Button menuOpenButton;
     public Button menuCloseButton;
-    public KeyCode menuKey = KeyCode.P;
+    public KeyCode menuKey = KeyCode.B;
     
     [Header("Animation Settings")]
     public float animationDuration = 0.5f;
-    public float offScreenOffset = 200f; // How far below screen to position panels
+    public float offScreenOffset = 200f;
     public AnimationCurve slideCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
     
     private bool isMenuOpen = false;
     private GameObject currentActiveTab;
     private Canvas canvas;
-    private float screenHeight;
+    private RectTransform canvasRect;
+    private float canvasHeight;
     
     // Animation tracking
     private bool isAnimating = false;
+    private Coroutine currentAnimation = null;
+    private bool isTabSelectionSlideIn = false; // Track if TabSelection is sliding in
     
     void Start()
     {
-        // Get canvas reference and screen height
         canvas = GetComponentInParent<Canvas>();
-        screenHeight = Screen.height;
-        
-        // Make sure menu starts closed and positioned off-screen
+        canvasRect = canvas.GetComponent<RectTransform>();
+        StartCoroutine(InitializeAfterFrame());
+    }
+    
+    IEnumerator InitializeAfterFrame()
+    {
+        yield return null;
+        canvasHeight = canvasRect.rect.height;
         SetupInitialPositions();
-        
-        // Set up button listeners
+        SetupButtonListeners();
+    }
+    
+    void SetupButtonListeners()
+    {
         if (menuOpenButton != null)
         {
             menuOpenButton.onClick.RemoveAllListeners();
@@ -57,20 +67,31 @@ public class MenuManager : MonoBehaviour
             menuCloseButton.onClick.AddListener(CloseMenu);
         }
         
-        // Only set up tab buttons if the panels exist
         if (statsTabButton != null && statsTabPanel != null)
+        {
+            statsTabButton.onClick.RemoveAllListeners();
             statsTabButton.onClick.AddListener(() => OpenTab(statsTabPanel));
+        }
         if (itemsTabButton != null && itemsTabPanel != null)
+        {
+            itemsTabButton.onClick.RemoveAllListeners();
             itemsTabButton.onClick.AddListener(() => OpenTab(itemsTabPanel));
+        }
         if (equipTabButton != null && equipTabPanel != null)
+        {
+            equipTabButton.onClick.RemoveAllListeners();
             equipTabButton.onClick.AddListener(() => OpenTab(equipTabPanel));
+        }
         if (settingsTabButton != null && settingsTabPanel != null)
+        {
+            settingsTabButton.onClick.RemoveAllListeners();
             settingsTabButton.onClick.AddListener(() => OpenTab(settingsTabPanel));
+        }
     }
     
     void Update()
     {
-        if (Input.GetKeyDown(menuKey) && !isAnimating)
+        if (Input.GetKeyDown(menuKey))
         {
             ToggleMenu();
         }
@@ -78,7 +99,6 @@ public class MenuManager : MonoBehaviour
     
     void SetupInitialPositions()
     {
-        // Position all panels off-screen at the bottom
         PositionPanelOffScreen(tabSelectionPanel);
         PositionPanelOffScreen(statsTabPanel);
         PositionPanelOffScreen(itemsTabPanel);
@@ -98,27 +118,29 @@ public class MenuManager : MonoBehaviour
         if (panel != null)
         {
             RectTransform rectTransform = panel.GetComponent<RectTransform>();
-            Vector3 offScreenPosition = rectTransform.anchoredPosition;
-            offScreenPosition.y = -screenHeight - offScreenOffset; // Position below screen + extra offset
+            Vector2 offScreenPosition = rectTransform.anchoredPosition;
+            offScreenPosition.y = -(canvasHeight / 2) - offScreenOffset;
             rectTransform.anchoredPosition = offScreenPosition;
-        }
-    }
-    
-    void PositionPanelOnScreen(GameObject panel)
-    {
-        if (panel != null)
-        {
-            RectTransform rectTransform = panel.GetComponent<RectTransform>();
-            Vector3 onScreenPosition = rectTransform.anchoredPosition;
-            onScreenPosition.y = 0; // Center position
-            rectTransform.anchoredPosition = onScreenPosition;
         }
     }
     
     public void ToggleMenu()
     {
-        if (isAnimating) return;
+        // Only allow interruption if TabSelection is sliding in
+        if (isTabSelectionSlideIn && currentAnimation != null)
+        {
+            StopCoroutine(currentAnimation);
+            isAnimating = false;
+            currentAnimation = null;
+            isTabSelectionSlideIn = false;
+        }
+        // Don't interrupt other animations - wait for them to finish
+        else if (isAnimating)
+        {
+            return;
+        }
         
+        // If any menu is open, close it. If none open, open tab selection.
         if (isMenuOpen)
             CloseMenu();
         else
@@ -130,7 +152,8 @@ public class MenuManager : MonoBehaviour
         if (isAnimating) return;
         
         isMenuOpen = true;
-        StartCoroutine(SlideInPanel(tabSelectionPanel));
+        isTabSelectionSlideIn = true; // Mark that TabSelection is sliding in
+        currentAnimation = StartCoroutine(SlideInPanel(tabSelectionPanel));
     }
     
     public void CloseMenu()
@@ -138,10 +161,11 @@ public class MenuManager : MonoBehaviour
         if (isAnimating) return;
         
         isMenuOpen = false;
+        isTabSelectionSlideIn = false; // Clear the flag
         
         // Close whichever panel is currently active
         GameObject panelToClose = currentActiveTab != null ? currentActiveTab : tabSelectionPanel;
-        StartCoroutine(SlideOutPanel(panelToClose, () => {
+        currentAnimation = StartCoroutine(SlideOutPanel(panelToClose, () => {
             currentActiveTab = null;
         }));
     }
@@ -155,9 +179,10 @@ public class MenuManager : MonoBehaviour
         if (currentPanel == tabToOpen) return; // Don't animate to same panel
         
         currentActiveTab = tabToOpen;
+        isTabSelectionSlideIn = false; // Clear the flag when switching tabs
         
         // Slide current panel down and new panel up simultaneously
-        StartCoroutine(SwitchPanels(currentPanel, tabToOpen));
+        currentAnimation = StartCoroutine(SwitchPanels(currentPanel, tabToOpen));
     }
     
     public void BackToTabSelection()
@@ -166,7 +191,8 @@ public class MenuManager : MonoBehaviour
         
         if (currentActiveTab != null)
         {
-            StartCoroutine(SwitchPanels(currentActiveTab, tabSelectionPanel));
+            isTabSelectionSlideIn = false; // Clear the flag
+            currentAnimation = StartCoroutine(SwitchPanels(currentActiveTab, tabSelectionPanel));
             currentActiveTab = null;
         }
     }
@@ -177,9 +203,11 @@ public class MenuManager : MonoBehaviour
         panel.SetActive(true);
         
         RectTransform rectTransform = panel.GetComponent<RectTransform>();
-        Vector3 startPos = rectTransform.anchoredPosition;
-        Vector3 endPos = startPos;
-        endPos.y = 0;
+        Vector2 startPos = new Vector2(rectTransform.anchoredPosition.x, -(canvasHeight / 2) - offScreenOffset);
+        Vector2 endPos = new Vector2(rectTransform.anchoredPosition.x, 0);
+        
+        // Ensure starting position is correct
+        rectTransform.anchoredPosition = startPos;
         
         float elapsedTime = 0f;
         
@@ -189,12 +217,14 @@ public class MenuManager : MonoBehaviour
             float progress = elapsedTime / animationDuration;
             float curveValue = slideCurve.Evaluate(progress);
             
-            rectTransform.anchoredPosition = Vector3.Lerp(startPos, endPos, curveValue);
+            rectTransform.anchoredPosition = Vector2.Lerp(startPos, endPos, curveValue);
             yield return null;
         }
         
         rectTransform.anchoredPosition = endPos;
         isAnimating = false;
+        currentAnimation = null;
+        isTabSelectionSlideIn = false; // Clear the flag when animation completes
     }
     
     IEnumerator SlideOutPanel(GameObject panel, System.Action onComplete = null)
@@ -202,9 +232,8 @@ public class MenuManager : MonoBehaviour
         isAnimating = true;
         
         RectTransform rectTransform = panel.GetComponent<RectTransform>();
-        Vector3 startPos = rectTransform.anchoredPosition;
-        Vector3 endPos = startPos;
-        endPos.y = -screenHeight - offScreenOffset; // Use the custom offset
+        Vector2 startPos = rectTransform.anchoredPosition;
+        Vector2 endPos = new Vector2(startPos.x, -(canvasHeight / 2) - offScreenOffset);
         
         float elapsedTime = 0f;
         
@@ -214,7 +243,7 @@ public class MenuManager : MonoBehaviour
             float progress = elapsedTime / animationDuration;
             float curveValue = slideCurve.Evaluate(progress);
             
-            rectTransform.anchoredPosition = Vector3.Lerp(startPos, endPos, curveValue);
+            rectTransform.anchoredPosition = Vector2.Lerp(startPos, endPos, curveValue);
             yield return null;
         }
         
@@ -223,6 +252,7 @@ public class MenuManager : MonoBehaviour
         
         onComplete?.Invoke();
         isAnimating = false;
+        currentAnimation = null;
     }
     
     IEnumerator SwitchPanels(GameObject currentPanel, GameObject newPanel)
@@ -231,18 +261,19 @@ public class MenuManager : MonoBehaviour
         
         // Activate new panel and position it off-screen
         newPanel.SetActive(true);
-        PositionPanelOffScreen(newPanel);
         
         RectTransform currentRect = currentPanel.GetComponent<RectTransform>();
         RectTransform newRect = newPanel.GetComponent<RectTransform>();
         
-        Vector3 currentStartPos = currentRect.anchoredPosition;
-        Vector3 currentEndPos = currentStartPos;
-        currentEndPos.y = -screenHeight - offScreenOffset; // Use the custom offset
+        // Set starting positions explicitly
+        Vector2 currentStartPos = currentRect.anchoredPosition;
+        Vector2 currentEndPos = new Vector2(currentStartPos.x, -(canvasHeight / 2) - offScreenOffset);
         
-        Vector3 newStartPos = newRect.anchoredPosition;
-        Vector3 newEndPos = newStartPos;
-        newEndPos.y = 0;
+        Vector2 newStartPos = new Vector2(newRect.anchoredPosition.x, -(canvasHeight / 2) - offScreenOffset);
+        Vector2 newEndPos = new Vector2(newRect.anchoredPosition.x, 0);
+        
+        // Ensure new panel starts in the correct off-screen position
+        newRect.anchoredPosition = newStartPos;
         
         float elapsedTime = 0f;
         
@@ -253,8 +284,8 @@ public class MenuManager : MonoBehaviour
             float curveValue = slideCurve.Evaluate(progress);
             
             // Animate both panels simultaneously
-            currentRect.anchoredPosition = Vector3.Lerp(currentStartPos, currentEndPos, curveValue);
-            newRect.anchoredPosition = Vector3.Lerp(newStartPos, newEndPos, curveValue);
+            currentRect.anchoredPosition = Vector2.Lerp(currentStartPos, currentEndPos, curveValue);
+            newRect.anchoredPosition = Vector2.Lerp(newStartPos, newEndPos, curveValue);
             yield return null;
         }
         
@@ -266,5 +297,6 @@ public class MenuManager : MonoBehaviour
         currentPanel.SetActive(false);
         
         isAnimating = false;
+        currentAnimation = null;
     }
 }

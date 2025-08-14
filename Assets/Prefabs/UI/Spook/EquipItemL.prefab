@@ -136,8 +136,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   cardButton: {fileID: 2541279972923634672}
   model3DContainer: {fileID: 52734959558016453}
-  rainbowSpeed: 2
-  shimmerSpeed: 1
 --- !u!1 &7871791565019788316
 GameObject:
   m_ObjectHideFlags: 0

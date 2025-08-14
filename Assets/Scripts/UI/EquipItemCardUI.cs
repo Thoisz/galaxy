@@ -12,14 +12,12 @@ public class EquipItemCardUI : MonoBehaviour
     private EquipmentManager equipmentManager;
     private GameObject instantiated3DModel;
     private bool isDetailPanelOpen = false;
+    private GameObject rainbowBackground; // Reference to the rainbow background
     
     public void SetupItemCard(EquipableItem item, EquipmentManager manager)
     {
         associatedItem = item;
         equipmentManager = manager;
-        
-        // Set rarity color effects (you can apply this to button or other elements)
-        SetupRarityVisuals();
         
         // Setup 3D model for static image capture (implement later)
         Setup3DModel();
@@ -29,22 +27,6 @@ public class EquipItemCardUI : MonoBehaviour
         {
             cardButton.onClick.RemoveAllListeners();
             cardButton.onClick.AddListener(OnCardClicked);
-        }
-    }
-    
-    void SetupRarityVisuals()
-    {
-        Color targetColor = equipmentManager.GetItemRarityColor(associatedItem.rarity);
-        
-        // Apply rarity color to button and disable hover effects for all rarities
-        if (cardButton != null)
-        {
-            ColorBlock colors = cardButton.colors;
-            colors.normalColor = targetColor;
-            colors.highlightedColor = targetColor; // Same as normal (no hover effect)
-            colors.selectedColor = targetColor;    // Same as normal
-            colors.pressedColor = targetColor * 0.8f; // Slightly darker when pressed
-            cardButton.colors = colors;
         }
     }
     
@@ -82,12 +64,58 @@ public class EquipItemCardUI : MonoBehaviour
         return associatedItem;
     }
     
+    public void SetRainbowBackground(GameObject rainbowBG)
+    {
+        rainbowBackground = rainbowBG;
+        
+        // Position rainbow background to match this card
+        if (rainbowBackground != null)
+        {
+            RectTransform rainbowRect = rainbowBackground.GetComponent<RectTransform>();
+            RectTransform cardRect = GetComponent<RectTransform>();
+            
+            if (rainbowRect != null && cardRect != null)
+            {
+                // Match position, size, and anchors
+                rainbowRect.anchorMin = cardRect.anchorMin;
+                rainbowRect.anchorMax = cardRect.anchorMax;
+                rainbowRect.anchoredPosition = cardRect.anchoredPosition;
+                rainbowRect.sizeDelta = cardRect.sizeDelta;
+                
+                // Make sure rainbow is behind this card
+                rainbowBackground.transform.SetSiblingIndex(transform.GetSiblingIndex() - 1);
+            }
+        }
+    }
+    
+    void Update()
+    {
+        // Keep rainbow background synchronized with this card's position
+        if (rainbowBackground != null)
+        {
+            RectTransform rainbowRect = rainbowBackground.GetComponent<RectTransform>();
+            RectTransform cardRect = GetComponent<RectTransform>();
+            
+            if (rainbowRect != null && cardRect != null)
+            {
+                rainbowRect.anchoredPosition = cardRect.anchoredPosition;
+                rainbowRect.sizeDelta = cardRect.sizeDelta;
+            }
+        }
+    }
+    
     void OnDestroy()
     {
         // Clean up the 3D model when card is destroyed
         if (instantiated3DModel != null)
         {
             DestroyImmediate(instantiated3DModel);
+        }
+        
+        // Clean up rainbow background when card is destroyed
+        if (rainbowBackground != null)
+        {
+            DestroyImmediate(rainbowBackground);
         }
     }
 }
