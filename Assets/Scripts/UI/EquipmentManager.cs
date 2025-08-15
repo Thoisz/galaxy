@@ -520,15 +520,13 @@ public class EquipmentManager : MonoBehaviour
     
     public void ShowItemDetail(EquipableItem item)
     {
-        // FIRST: Always reset ALL detail panels before opening any new one
-        // This prevents ghost panels from previous coordinated closes
-        ForceResetAllDetailPanels();
-        
-        // Get the correct detail panel based on rarity
-        GameObject targetDetailPanel = GetDetailPanelForRarity(item.rarity);
+        // Check for same item click BEFORE resetting anything
+        bool isSameItemClick = (currentDetailItem == item);
+        bool isPanelOpen = (currentActiveDetailPanel != null && currentActiveDetailPanel.activeSelf);
+        bool isAnimating = isDetailPanelAnimating;
         
         // If the same item is clicked during animation, reverse/cancel the slide
-        if (currentDetailItem == item && isDetailPanelAnimating && currentDetailAnimation != null)
+        if (isSameItemClick && isAnimating && currentDetailAnimation != null)
         {
             StopCoroutine(currentDetailAnimation);
             isDetailPanelAnimating = false;
@@ -540,11 +538,14 @@ public class EquipmentManager : MonoBehaviour
         }
         
         // If the same item is clicked when panel is fully open, close it
-        if (currentDetailItem == item && currentActiveDetailPanel != null && currentActiveDetailPanel.activeSelf && !isDetailPanelAnimating)
+        if (isSameItemClick && isPanelOpen && !isAnimating)
         {
             CloseItemDetail();
             return;
         }
+        
+        // Get the correct detail panel based on rarity
+        GameObject targetDetailPanel = GetDetailPanelForRarity(item.rarity);
         
         // Stop any current animation before starting a new one
         if (currentDetailAnimation != null)
@@ -562,9 +563,20 @@ public class EquipmentManager : MonoBehaviour
         
         if (targetDetailPanel != null)
         {
-            // Since we reset everything above, we can always just slide in normally
-            currentActiveDetailPanel = targetDetailPanel;
-            currentDetailAnimation = StartCoroutine(SlideInDetailPanel(targetDetailPanel, item));
+            // Check if we need to switch panels or just open new one
+            if (currentActiveDetailPanel != null && currentActiveDetailPanel != targetDetailPanel && currentActiveDetailPanel.activeSelf)
+            {
+                // Different panel is open - use smooth switching animation
+                currentDetailAnimation = StartCoroutine(SwitchDetailPanels(currentActiveDetailPanel, targetDetailPanel, item));
+                currentActiveDetailPanel = targetDetailPanel; // Update reference
+            }
+            else
+            {
+                // No panel open or same panel - reset all first to prevent ghosts, then slide in
+                ForceResetAllDetailPanels();
+                currentActiveDetailPanel = targetDetailPanel;
+                currentDetailAnimation = StartCoroutine(SlideInDetailPanel(targetDetailPanel, item));
+            }
         }
     }
     
