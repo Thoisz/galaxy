@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System.Linq;
+using System.Collections;
 
 [System.Serializable]
 public class EquipableItem
@@ -39,8 +40,8 @@ public enum EquipmentRarity
 {
     Common,    // Blue
     Rare,      // Orange  
-    Legend,    // Purple
-    Mythical   // Animated rainbow
+    Legendary, // Purple (changed from Legend)
+    Exotic     // Animated rainbow (changed from Mythical)
 }
 
 public class EquipmentManager : MonoBehaviour
@@ -52,8 +53,8 @@ public class EquipmentManager : MonoBehaviour
     public Transform itemsContainer; // The Content object of the ScrollView
     public GameObject equipItemCardPrefabC; // Common rarity prefab
     public GameObject equipItemCardPrefabR; // Rare rarity prefab
-    public GameObject equipItemCardPrefabL; // Legend rarity prefab
-    public GameObject equipItemCardPrefabM; // Mythical rarity prefab
+    public GameObject equipItemCardPrefabL; // Legendary rarity prefab
+    public GameObject equipItemCardPrefabE; // Exotic rarity prefab (changed from M)
     public GameObject rainbowBackgroundPrefab; // Standalone rainbow background prefab
     public TMP_Dropdown filterDropdown;
     public TMP_InputField searchInputField;
@@ -68,18 +69,30 @@ public class EquipmentManager : MonoBehaviour
     [Header("Detail Panel References")]
     public GameObject itemDetailPanelC; // Common rarity detail panel
     public GameObject itemDetailPanelR; // Rare rarity detail panel
-    public GameObject itemDetailPanelL; // Legend rarity detail panel
-    public GameObject itemDetailPanelM; // Mythical rarity detail panel
+    public GameObject itemDetailPanelL; // Legendary rarity detail panel
+    public GameObject itemDetailPanelE; // Exotic rarity detail panel (changed from M)
     public Image detailPanelBackground; // The background image of the detail panel
     public Transform detailPanel3DContainer; // Where to show the 3D model
     public TextMeshProUGUI detailItemName;
     public TextMeshProUGUI detailItemStats;
     public Button equipButton;
     
+    [Header("Animation Settings")]
+    public float slideAnimationDuration = 0.3f;
+    public float slideStartOffset = 500f; // How far right to start the slide from
+    public Vector2 positionOffset = Vector2.zero; // Manual position adjustment if needed
+    public AnimationCurve slideCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+    
     private List<EquipableItem> filteredItems;
     private List<GameObject> currentItemCards = new List<GameObject>();
     private List<GameObject> currentRainbowBackgrounds = new List<GameObject>(); // Track rainbow backgrounds
     private EquipableItem currentDetailItem; // Track which item's detail is open
+    private GameObject currentActiveDetailPanel = null;
+    private bool isDetailPanelAnimating = false;
+    private Coroutine currentDetailAnimation = null; // Track current animation coroutine
+    
+    // Store original positions for each detail panel
+    private Dictionary<GameObject, Vector2> originalDetailPanelPositions = new Dictionary<GameObject, Vector2>();
     
     void Start()
     {
@@ -92,6 +105,69 @@ public class EquipmentManager : MonoBehaviour
         AddSampleEquipment();
         
         RefreshEquipmentDisplay();
+    }
+    
+    void OnEnable()
+    {
+        // Call this whenever the EquipmentManager GameObject becomes active
+        // This ensures we reset detail panels when the equip tab opens
+        if (gameObject.activeInHierarchy)
+        {
+            StartCoroutine(ResetDetailPanelsAfterFrame());
+        }
+    }
+    
+    IEnumerator ResetDetailPanelsAfterFrame()
+    {
+        // Wait a frame to ensure any ongoing animations are processed
+        yield return null;
+        yield return null; // Wait an extra frame to be safe
+        
+        // Only reset if we don't currently have an active detail panel
+        if (currentActiveDetailPanel == null || !currentActiveDetailPanel.activeSelf)
+        {
+            ResetAllDetailPanels();
+            
+            // Clear any current detail item state
+            currentDetailItem = null;
+            currentActiveDetailPanel = null;
+            
+            // Stop any animations
+            if (currentDetailAnimation != null)
+            {
+                StopCoroutine(currentDetailAnimation);
+                currentDetailAnimation = null;
+            }
+            isDetailPanelAnimating = false;
+            
+            // Update card states
+            UpdateAllCardStates();
+        }
+    }
+    
+    // NEW METHOD: Reset all detail panels to original positions
+    void ResetAllDetailPanels()
+    {
+        if (itemDetailPanelC != null)
+        {
+            itemDetailPanelC.SetActive(false);
+            itemDetailPanelC.GetComponent<RectTransform>().anchoredPosition = originalDetailPanelPositions[itemDetailPanelC];
+        }
+        if (itemDetailPanelR != null)
+        {
+            itemDetailPanelR.SetActive(false);
+            itemDetailPanelR.GetComponent<RectTransform>().anchoredPosition = originalDetailPanelPositions[itemDetailPanelR];
+        }
+        if (itemDetailPanelL != null)
+        {
+            itemDetailPanelL.SetActive(false);
+            itemDetailPanelL.GetComponent<RectTransform>().anchoredPosition = originalDetailPanelPositions[itemDetailPanelL];
+        }
+        if (itemDetailPanelE != null)
+        {
+            itemDetailPanelE.SetActive(false);
+            itemDetailPanelE.GetComponent<RectTransform>().anchoredPosition = originalDetailPanelPositions[itemDetailPanelE];
+        }
     }
     
     void SetupFilterDropdown()
@@ -115,15 +191,27 @@ public class EquipmentManager : MonoBehaviour
     
     void SetupDetailPanel()
     {
-        // Make sure all detail panels start closed
+        // Store original positions and make sure all detail panels start closed
         if (itemDetailPanelC != null)
+        {
+            originalDetailPanelPositions[itemDetailPanelC] = itemDetailPanelC.GetComponent<RectTransform>().anchoredPosition + positionOffset;
             itemDetailPanelC.SetActive(false);
+        }
         if (itemDetailPanelR != null)
+        {
+            originalDetailPanelPositions[itemDetailPanelR] = itemDetailPanelR.GetComponent<RectTransform>().anchoredPosition + positionOffset;
             itemDetailPanelR.SetActive(false);
+        }
         if (itemDetailPanelL != null)
+        {
+            originalDetailPanelPositions[itemDetailPanelL] = itemDetailPanelL.GetComponent<RectTransform>().anchoredPosition + positionOffset;
             itemDetailPanelL.SetActive(false);
-        if (itemDetailPanelM != null)
-            itemDetailPanelM.SetActive(false);
+        }
+        if (itemDetailPanelE != null)
+        {
+            originalDetailPanelPositions[itemDetailPanelE] = itemDetailPanelE.GetComponent<RectTransform>().anchoredPosition + positionOffset;
+            itemDetailPanelE.SetActive(false);
+        }
     }
     
     void SetupEquipPanelCloseButton()
@@ -136,8 +224,104 @@ public class EquipmentManager : MonoBehaviour
     
     void CloseEquipPanel()
     {
-        // The MenuManager's close button will handle closing
-        // No interference with MenuManager - let it handle all menu state
+        // Close detail panel with coordinated movement (right + down)
+        if (currentActiveDetailPanel != null && currentActiveDetailPanel.activeSelf)
+        {
+            CloseDetailPanelCoordinated();
+        }
+        
+        // Find and call MenuManager's CloseMenu method
+        MenuManager menuManager = FindObjectOfType<MenuManager>();
+        if (menuManager != null)
+        {
+            menuManager.CloseMenu();
+        }
+        else
+        {
+            Debug.LogWarning("MenuManager not found! Cannot close equipment panel properly.");
+        }
+    }
+    
+    // PUBLIC METHOD: Call this when all menus are being closed (B key, menu button, etc.)
+    public void OnAllMenusClosed()
+    {
+        // When all menus are closed, use coordinated movement for detail panels
+        if (currentActiveDetailPanel != null && currentActiveDetailPanel.activeSelf)
+        {
+            CloseDetailPanelCoordinated();
+        }
+    }
+    
+    // NEW METHOD: Close detail panel with coordinated movement
+    void CloseDetailPanelCoordinated()
+    {
+        // Stop any current animation
+        if (currentDetailAnimation != null)
+        {
+            StopCoroutine(currentDetailAnimation);
+            currentDetailAnimation = null;
+        }
+        
+        if (currentActiveDetailPanel != null)
+        {
+            currentDetailAnimation = StartCoroutine(SlideCoordinatedDetailPanel(currentActiveDetailPanel));
+        }
+        
+        currentDetailItem = null;
+        UpdateAllCardStates();
+    }
+    
+    // COROUTINE: Slide panel right + down with hardcoded optimal settings
+    IEnumerator SlideCoordinatedDetailPanel(GameObject panel)
+    {
+        isDetailPanelAnimating = true;
+        
+        RectTransform rectTransform = panel.GetComponent<RectTransform>();
+        Vector2 startPos = rectTransform.anchoredPosition; // Current position
+        
+        // Use hardcoded optimal settings
+        float animDuration = 0.5f; // Custom Coordinated Duration
+        AnimationCurve animCurve = slideCurve; // Use our slide curve
+        
+        // Calculate end position
+        Vector2 originalPos = originalDetailPanelPositions[panel];
+        
+        // Use hardcoded optimal down speed settings
+        Canvas canvas = GetComponentInParent<Canvas>();
+        float canvasHeight = canvas.GetComponent<RectTransform>().rect.height;
+        MenuManager menuManager = FindObjectOfType<MenuManager>();
+        float menuManagerDownDistance = (canvasHeight / 2) + (menuManager != null ? menuManager.offScreenOffset : 200f);
+        float downMovement = startPos.y - (menuManagerDownDistance * 2.2f); // Custom Down Speed Multiplier
+        
+        Vector2 endPos = new Vector2(
+            originalPos.x + slideStartOffset,  // Right movement (same as normal)
+            downMovement // Down movement with multiplier
+        );
+        
+        float elapsedTime = 0f;
+        
+        while (elapsedTime < animDuration)
+        {
+            elapsedTime += Time.deltaTime;
+            float progress = elapsedTime / animDuration;
+            float curveValue = animCurve.Evaluate(progress);
+            
+            rectTransform.anchoredPosition = Vector2.Lerp(startPos, endPos, curveValue);
+            yield return null;
+        }
+        
+        rectTransform.anchoredPosition = endPos;
+        panel.SetActive(false);
+        
+        // DON'T reset panel position here - it will be reset when the panel is properly opened next time
+        // This prevents the ghost sliding effect when switching between different rarity panels
+        
+        // Animation completed successfully
+        currentActiveDetailPanel = null;
+        isDetailPanelAnimating = false;
+        currentDetailAnimation = null;
+        
+        Debug.Log($"Detail panel closed with coordinated movement (Duration: {animDuration}, Down multiplier: 2.2)");
     }
     
     void OnFilterChanged(int filterIndex)
@@ -186,11 +370,11 @@ public class EquipmentManager : MonoBehaviour
         {
             GameObject prefabToUse = GetPrefabForRarity(filteredItems[i].rarity);
             
-            // For mythical items, create a wrapper to hold both background and button
-            if (filteredItems[i].rarity == EquipmentRarity.Mythical && rainbowBackgroundPrefab != null)
+            // For exotic items, create a wrapper to hold both background and button
+            if (filteredItems[i].rarity == EquipmentRarity.Exotic && rainbowBackgroundPrefab != null)
             {
                 // Create wrapper GameObject
-                GameObject wrapper = new GameObject("MythicalWrapper");
+                GameObject wrapper = new GameObject("ExoticWrapper");
                 wrapper.transform.SetParent(itemsContainer, false); // Important: worldPositionStays = false
                 
                 // Add RectTransform first
@@ -245,7 +429,7 @@ public class EquipmentManager : MonoBehaviour
             }
             else
             {
-                // Normal items (non-mythical)
+                // Normal items (non-exotic)
                 GameObject itemCard = Instantiate(prefabToUse, itemsContainer);
                 EquipItemCardUI itemCardUI = itemCard.GetComponent<EquipItemCardUI>();
                 
@@ -336,14 +520,38 @@ public class EquipmentManager : MonoBehaviour
     
     public void ShowItemDetail(EquipableItem item)
     {
-        // Get the correct detail panel based on rarity
-        GameObject currentDetailPanel = GetDetailPanelForRarity(item.rarity);
+        // FIRST: Always reset ALL detail panels before opening any new one
+        // This prevents ghost panels from previous coordinated closes
+        ForceResetAllDetailPanels();
         
-        // If the same item is clicked, close the detail panel
-        if (currentDetailItem == item && currentDetailPanel != null && currentDetailPanel.activeSelf)
+        // Get the correct detail panel based on rarity
+        GameObject targetDetailPanel = GetDetailPanelForRarity(item.rarity);
+        
+        // If the same item is clicked during animation, reverse/cancel the slide
+        if (currentDetailItem == item && isDetailPanelAnimating && currentDetailAnimation != null)
+        {
+            StopCoroutine(currentDetailAnimation);
+            isDetailPanelAnimating = false;
+            currentDetailAnimation = null;
+            
+            // Reverse slide - close the panel that was sliding in
+            CloseItemDetail();
+            return;
+        }
+        
+        // If the same item is clicked when panel is fully open, close it
+        if (currentDetailItem == item && currentActiveDetailPanel != null && currentActiveDetailPanel.activeSelf && !isDetailPanelAnimating)
         {
             CloseItemDetail();
             return;
+        }
+        
+        // Stop any current animation before starting a new one
+        if (currentDetailAnimation != null)
+        {
+            StopCoroutine(currentDetailAnimation);
+            isDetailPanelAnimating = false;
+            currentDetailAnimation = null;
         }
         
         // Update current detail item
@@ -352,65 +560,195 @@ public class EquipmentManager : MonoBehaviour
         // Update all card states
         UpdateAllCardStates();
         
-        // Close all detail panels first
-        CloseAllDetailPanels();
-        
-        if (currentDetailPanel != null)
+        if (targetDetailPanel != null)
         {
-            currentDetailPanel.SetActive(true);
-            
-            // Populate detail panel with item info
-            if (detailItemName != null)
-                detailItemName.text = item.itemName;
-            
-            if (detailItemStats != null)
-                detailItemStats.text = GenerateStatsText(item);
-            
-            // Setup equip button
-            if (equipButton != null)
-            {
-                equipButton.onClick.RemoveAllListeners();
-                
-                if (item.isEquipped)
-                {
-                    equipButton.onClick.AddListener(() => UnequipItem(item));
-                }
-                else
-                {
-                    equipButton.onClick.AddListener(() => EquipItem(item));
-                }
-                
-                // Change button text based on equipped status
-                TextMeshProUGUI buttonText = equipButton.GetComponentInChildren<TextMeshProUGUI>();
-                if (buttonText != null)
-                {
-                    buttonText.text = item.isEquipped ? "UNEQUIP" : "EQUIP";
-                }
-            }
-            
-            // Show 3D model in detail panel (implement later)
-            Show3DModelInDetail(item);
+            // Since we reset everything above, we can always just slide in normally
+            currentActiveDetailPanel = targetDetailPanel;
+            currentDetailAnimation = StartCoroutine(SlideInDetailPanel(targetDetailPanel, item));
         }
+    }
+    
+    // FORCE reset all detail panels - more aggressive than ResetAllDetailPanels
+    void ForceResetAllDetailPanels()
+    {
+        // Stop any ongoing animations first
+        if (currentDetailAnimation != null)
+        {
+            StopCoroutine(currentDetailAnimation);
+            currentDetailAnimation = null;
+        }
+        isDetailPanelAnimating = false;
+        
+        // Force reset all panels regardless of their current state
+        if (itemDetailPanelC != null)
+        {
+            itemDetailPanelC.SetActive(false);
+            itemDetailPanelC.GetComponent<RectTransform>().anchoredPosition = originalDetailPanelPositions[itemDetailPanelC];
+        }
+        if (itemDetailPanelR != null)
+        {
+            itemDetailPanelR.SetActive(false);
+            itemDetailPanelR.GetComponent<RectTransform>().anchoredPosition = originalDetailPanelPositions[itemDetailPanelR];
+        }
+        if (itemDetailPanelL != null)
+        {
+            itemDetailPanelL.SetActive(false);
+            itemDetailPanelL.GetComponent<RectTransform>().anchoredPosition = originalDetailPanelPositions[itemDetailPanelL];
+        }
+        if (itemDetailPanelE != null)
+        {
+            itemDetailPanelE.SetActive(false);
+            itemDetailPanelE.GetComponent<RectTransform>().anchoredPosition = originalDetailPanelPositions[itemDetailPanelE];
+        }
+        
+        // Clear all state
+        currentDetailItem = null;
+        currentActiveDetailPanel = null;
     }
     
     public void CloseItemDetail()
     {
+        // Stop any current animation
+        if (currentDetailAnimation != null)
+        {
+            StopCoroutine(currentDetailAnimation);
+            currentDetailAnimation = null;
+        }
+        
+        if (currentActiveDetailPanel != null)
+        {
+            currentDetailAnimation = StartCoroutine(SlideOutDetailPanel(currentActiveDetailPanel));
+        }
+        
         currentDetailItem = null;
         UpdateAllCardStates();
-        
-        CloseAllDetailPanels();
     }
     
-    void CloseAllDetailPanels()
+    IEnumerator SlideInDetailPanel(GameObject panel, EquipableItem item)
     {
-        if (itemDetailPanelC != null)
-            itemDetailPanelC.SetActive(false);
-        if (itemDetailPanelR != null)
-            itemDetailPanelR.SetActive(false);
-        if (itemDetailPanelL != null)
-            itemDetailPanelL.SetActive(false);
-        if (itemDetailPanelM != null)
-            itemDetailPanelM.SetActive(false);
+        isDetailPanelAnimating = true;
+        
+        // IMPORTANT: Reset to original position BEFORE activating to prevent ghost sliding
+        RectTransform rectTransform = panel.GetComponent<RectTransform>();
+        Vector2 finalPos = originalDetailPanelPositions[panel];
+        rectTransform.anchoredPosition = finalPos;
+        
+        // NOW activate panel - it's already in the correct position
+        panel.SetActive(true);
+        
+        // Start position is offset to the right by slideStartOffset
+        Vector2 startPos = new Vector2(finalPos.x + slideStartOffset, finalPos.y);
+        
+        // Set starting position for animation
+        rectTransform.anchoredPosition = startPos;
+        
+        float elapsedTime = 0f;
+        
+        while (elapsedTime < slideAnimationDuration)
+        {
+            elapsedTime += Time.deltaTime;
+            float progress = elapsedTime / slideAnimationDuration;
+            float curveValue = slideCurve.Evaluate(progress);
+            
+            rectTransform.anchoredPosition = Vector2.Lerp(startPos, finalPos, curveValue);
+            yield return null;
+        }
+        
+        rectTransform.anchoredPosition = finalPos;
+        
+        // Animation completed successfully
+        isDetailPanelAnimating = false;
+        currentDetailAnimation = null;
+        
+        // Populate detail panel with item info (for testing, just log)
+        Debug.Log($"Detail panel opened for {item.itemName} (Rarity: {item.rarity})");
+    }
+    
+    IEnumerator SlideOutDetailPanel(GameObject panel)
+    {
+        isDetailPanelAnimating = true;
+        
+        RectTransform rectTransform = panel.GetComponent<RectTransform>();
+        Vector2 startPos = rectTransform.anchoredPosition; // Current position
+        
+        // Get the original position to calculate the proper offset
+        Vector2 originalPos = originalDetailPanelPositions[panel];
+        Vector2 endPos = new Vector2(originalPos.x + slideStartOffset, originalPos.y); // Slide right by offset from original position
+        
+        float elapsedTime = 0f;
+        
+        while (elapsedTime < slideAnimationDuration)
+        {
+            elapsedTime += Time.deltaTime;
+            float progress = elapsedTime / slideAnimationDuration;
+            float curveValue = slideCurve.Evaluate(progress);
+            
+            rectTransform.anchoredPosition = Vector2.Lerp(startPos, endPos, curveValue);
+            yield return null;
+        }
+        
+        rectTransform.anchoredPosition = endPos;
+        panel.SetActive(false);
+        
+        // Animation completed successfully
+        currentActiveDetailPanel = null;
+        isDetailPanelAnimating = false;
+        currentDetailAnimation = null;
+        
+        Debug.Log("Detail panel closed and hidden");
+    }
+    
+    IEnumerator SwitchDetailPanels(GameObject oldPanel, GameObject newPanel, EquipableItem item)
+    {
+        isDetailPanelAnimating = true;
+        
+        // Activate new panel and position it off-screen to the right
+        newPanel.SetActive(true);
+        RectTransform newRect = newPanel.GetComponent<RectTransform>();
+        RectTransform oldRect = oldPanel.GetComponent<RectTransform>();
+        
+        // Get positions
+        Vector2 newFinalPos = originalDetailPanelPositions[newPanel];
+        Vector2 newStartPos = new Vector2(newFinalPos.x + slideStartOffset, newFinalPos.y);
+        
+        Vector2 oldStartPos = oldRect.anchoredPosition; // Current position of old panel
+        Vector2 oldEndPos = new Vector2(originalDetailPanelPositions[oldPanel].x + slideStartOffset, originalDetailPanelPositions[oldPanel].y);
+        
+        // Set new panel starting position
+        newRect.anchoredPosition = newStartPos;
+        
+        float elapsedTime = 0f;
+        
+        // Animate both panels simultaneously
+        while (elapsedTime < slideAnimationDuration)
+        {
+            elapsedTime += Time.deltaTime;
+            float progress = elapsedTime / slideAnimationDuration;
+            float curveValue = slideCurve.Evaluate(progress);
+            
+            // New panel slides in from right
+            newRect.anchoredPosition = Vector2.Lerp(newStartPos, newFinalPos, curveValue);
+            
+            // Old panel slides out to right
+            oldRect.anchoredPosition = Vector2.Lerp(oldStartPos, oldEndPos, curveValue);
+            
+            yield return null;
+        }
+        
+        // Finalize positions
+        newRect.anchoredPosition = newFinalPos;
+        oldRect.anchoredPosition = oldEndPos;
+        
+        // Deactivate old panel and update reference
+        oldPanel.SetActive(false);
+        currentActiveDetailPanel = newPanel;
+        
+        // Animation completed successfully
+        isDetailPanelAnimating = false;
+        currentDetailAnimation = null;
+        
+        // Populate detail panel with item info (for testing, just log)
+        Debug.Log($"Switched to detail panel for {item.itemName} (Rarity: {item.rarity})");
     }
     
     void UpdateAllCardStates()
@@ -418,11 +756,11 @@ public class EquipmentManager : MonoBehaviour
         // Update all item cards to reflect which one has detail panel open
         foreach (GameObject cardObj in currentItemCards)
         {
-            // For mythical items, the cardObj is the wrapper, so we need to find the actual card inside
+            // For exotic items, the cardObj is the wrapper, so we need to find the actual card inside
             EquipItemCardUI cardUI = cardObj.GetComponent<EquipItemCardUI>();
-            if (cardUI == null && cardObj.name == "MythicalWrapper")
+            if (cardUI == null && cardObj.name == "ExoticWrapper")
             {
-                // This is a mythical wrapper, find the card UI inside
+                // This is an exotic wrapper, find the card UI inside
                 cardUI = cardObj.GetComponentInChildren<EquipItemCardUI>();
             }
             
@@ -514,13 +852,15 @@ public class EquipmentManager : MonoBehaviour
     
     void AddSampleEquipment()
     {
-        // Sample equipment section - remove or modify as needed
-        // AddEquipment(new EquipableItem { 
-        //     itemName = "Sample Item", 
-        //     itemDescription = "Sample description",
-        //     category = EquipmentCategory.Accessory, 
-        //     rarity = EquipmentRarity.Common
-        // });
+        // Add a sample exotic item for testing
+        AddEquipment(new EquipableItem { 
+            itemName = "Exotic Test Sword", 
+            itemDescription = "A test exotic weapon",
+            category = EquipmentCategory.MeleeWeapon, 
+            rarity = EquipmentRarity.Exotic,
+            damage = 100,
+            attackSpeed = 1.5f
+        });
     }
     
     GameObject GetPrefabForRarity(EquipmentRarity rarity)
@@ -531,10 +871,10 @@ public class EquipmentManager : MonoBehaviour
                 return equipItemCardPrefabC;
             case EquipmentRarity.Rare:
                 return equipItemCardPrefabR;
-            case EquipmentRarity.Legend:
+            case EquipmentRarity.Legendary:
                 return equipItemCardPrefabL;
-            case EquipmentRarity.Mythical:
-                return equipItemCardPrefabM;
+            case EquipmentRarity.Exotic:
+                return equipItemCardPrefabE;
             default:
                 return equipItemCardPrefabC; // Fallback to common
         }
@@ -548,10 +888,10 @@ public class EquipmentManager : MonoBehaviour
                 return itemDetailPanelC;
             case EquipmentRarity.Rare:
                 return itemDetailPanelR;
-            case EquipmentRarity.Legend:
+            case EquipmentRarity.Legendary:
                 return itemDetailPanelL;
-            case EquipmentRarity.Mythical:
-                return itemDetailPanelM;
+            case EquipmentRarity.Exotic:
+                return itemDetailPanelE;
             default:
                 return itemDetailPanelC; // Fallback to common
         }

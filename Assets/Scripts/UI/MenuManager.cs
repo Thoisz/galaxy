@@ -155,35 +155,44 @@ public class MenuManager : MonoBehaviour
         isTabSelectionSlideIn = true; // Mark that TabSelection is sliding in
         currentAnimation = StartCoroutine(SlideInPanel(tabSelectionPanel));
     }
+
+    
     
     public void CloseMenu()
+{
+    if (isAnimating) return;
+    
+    // NEW: Notify EquipmentManager about all menus closing
+    EquipmentManager equipmentManager = FindObjectOfType<EquipmentManager>();
+    if (equipmentManager != null)
     {
-        if (isAnimating) return;
-        
-        isMenuOpen = false;
-        isTabSelectionSlideIn = false; // Clear the flag
-        
-        // Close whichever panel is currently active
-        GameObject panelToClose = currentActiveTab != null ? currentActiveTab : tabSelectionPanel;
-        currentAnimation = StartCoroutine(SlideOutPanel(panelToClose, () => {
-            currentActiveTab = null;
-        }));
+        equipmentManager.OnAllMenusClosed();
     }
     
+    isMenuOpen = false;
+    isTabSelectionSlideIn = false; // Clear the flag
+    
+    // Close whichever panel is currently active
+    GameObject panelToClose = currentActiveTab != null ? currentActiveTab : tabSelectionPanel;
+    currentAnimation = StartCoroutine(SlideOutPanel(panelToClose, () => {
+        currentActiveTab = null;
+    }));
+}
+    
     public void OpenTab(GameObject tabToOpen)
-    {
-        if (isAnimating || tabToOpen == null) return;
-        
-        GameObject currentPanel = currentActiveTab != null ? currentActiveTab : tabSelectionPanel;
-        
-        if (currentPanel == tabToOpen) return; // Don't animate to same panel
-        
-        currentActiveTab = tabToOpen;
-        isTabSelectionSlideIn = false; // Clear the flag when switching tabs
-        
-        // Slide current panel down and new panel up simultaneously
-        currentAnimation = StartCoroutine(SwitchPanels(currentPanel, tabToOpen));
-    }
+{
+    if (isAnimating || tabToOpen == null) return;
+    
+    GameObject currentPanel = currentActiveTab != null ? currentActiveTab : tabSelectionPanel;
+    
+    if (currentPanel == tabToOpen) return; // Don't animate to same panel
+    
+    currentActiveTab = tabToOpen;
+    isTabSelectionSlideIn = false; // Clear the flag when switching tabs
+    
+    // Slide current panel down and new panel up simultaneously
+    currentAnimation = StartCoroutine(SwitchPanels(currentPanel, tabToOpen));
+}
     
     public void BackToTabSelection()
     {
