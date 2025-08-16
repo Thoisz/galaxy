@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using System.Collections;
+using TMPro;
 
 public class MenuManager : MonoBehaviour
 {
@@ -90,12 +91,42 @@ public class MenuManager : MonoBehaviour
     }
     
     void Update()
+{
+    if (Input.GetKeyDown(menuKey))
     {
-        if (Input.GetKeyDown(menuKey))
+        // Don't process menu key if typing in any input field
+        if (IsTypingInInputField())
         {
-            ToggleMenu();
+            return;
         }
+        
+        ToggleMenu();
     }
+}
+
+// Helper method to check if user is typing
+bool IsTypingInInputField()
+{
+    if (UnityEngine.EventSystems.EventSystem.current == null)
+        return false;
+        
+    GameObject selectedObject = UnityEngine.EventSystems.EventSystem.current.currentSelectedGameObject;
+    
+    if (selectedObject == null)
+        return false;
+    
+    // Check for TextMeshPro input field
+    TMP_InputField tmpInputField = selectedObject.GetComponent<TMP_InputField>();
+    if (tmpInputField != null && tmpInputField.isFocused)
+        return true;
+    
+    // Check for legacy Unity input field
+    InputField legacyInputField = selectedObject.GetComponent<InputField>();
+    if (legacyInputField != null && legacyInputField.isFocused)
+        return true;
+    
+    return false;
+}
     
     void SetupInitialPositions()
     {
@@ -125,27 +156,40 @@ public class MenuManager : MonoBehaviour
     }
     
     public void ToggleMenu()
+{
+    // Allow interruption in two cases:
+    // 1. If TabSelection is sliding in (existing functionality)
+    // 2. If any panel is sliding out and we want to bring TabSelection back up
+    if ((isTabSelectionSlideIn || (!isMenuOpen && isAnimating)) && currentAnimation != null)
     {
-        // Only allow interruption if TabSelection is sliding in
-        if (isTabSelectionSlideIn && currentAnimation != null)
+        // Don't stop the current animation - let it continue and start coordinated animation
+        if (!isMenuOpen && isAnimating && currentActiveTab != null)
         {
+            // Panel is sliding out, start coordinated animation
+            OpenMenuWithInterruption();
+            return;
+        }
+        else
+        {
+            // TabSelection sliding in case - stop and restart
             StopCoroutine(currentAnimation);
             isAnimating = false;
             currentAnimation = null;
             isTabSelectionSlideIn = false;
         }
-        // Don't interrupt other animations - wait for them to finish
-        else if (isAnimating)
-        {
-            return;
-        }
-        
-        // If any menu is open, close it. If none open, open tab selection.
-        if (isMenuOpen)
-            CloseMenu();
-        else
-            OpenMenu();
     }
+    // Don't interrupt tab-to-tab switching animations
+    else if (isAnimating && isMenuOpen)
+    {
+        return;
+    }
+    
+    // If any menu is open, close it. If none open, open tab selection.
+    if (isMenuOpen)
+        CloseMenu();
+    else
+        OpenMenuWithInterruption();
+}
     
     public void OpenMenu()
     {
@@ -156,13 +200,106 @@ public class MenuManager : MonoBehaviour
         currentAnimation = StartCoroutine(SlideInPanel(tabSelectionPanel));
     }
 
+    public void OpenMenuWithInterruption()
+{
+    // This method handles opening TabSelection even if another panel is sliding out
+    isMenuOpen = true;
+    isTabSelectionSlideIn = true;
     
+    // If there's currently a panel sliding out, we need to handle the coordination
+    if (isAnimating && currentActiveTab != null)
+    {
+        // Ensure proper layering before coordinated animation
+        EnsureProperPanelLayering();
+        
+        // Start coordinated animation: old panel continues sliding down, TabSelection slides up
+        // Set TabSelection to render above other panels temporarily
+        SetPanelSortingOrder(tabSelectionPanel, 5);
+        currentAnimation = StartCoroutine(CoordinatedPanelSwitch(currentActiveTab, tabSelectionPanel));
+        currentActiveTab = null;
+    }
+    else
+    {
+        // Normal TabSelection slide in
+        SetPanelSortingOrder(tabSelectionPanel, 0);
+        currentAnimation = StartCoroutine(SlideInPanel(tabSelectionPanel));
+    }
+}
+
+IEnumerator CoordinatedPanelSwitch(GameObject panelGoingDown, GameObject panelComingUp)
+{
+    isAnimating = true;
+    
+    // Activate the panel coming up and position it off-screen below
+    panelComingUp.SetActive(true);
+    
+    RectTransform downRect = panelGoingDown.GetComponent<RectTransform>();
+    RectTransform upRect = panelComingUp.GetComponent<RectTransform>();
+    
+    // Get current position of the panel going down (it might already be mid-animation)
+    Vector2 downCurrentPos = downRect.anchoredPosition;
+    
+    // Calculate end positions
+    Vector2 downEndPos = new Vector2(downCurrentPos.x, -(canvasHeight / 2) - offScreenOffset);
+    Vector2 upStartPos = new Vector2(upRect.anchoredPosition.x, -(canvasHeight / 2) - offScreenOffset);
+    Vector2 upEndPos = new Vector2(upRect.anchoredPosition.x, 0);
+    
+    // Position the incoming panel below screen
+    upRect.anchoredPosition = upStartPos;
+    
+    // Calculate how much of the down animation is already complete
+    float downAnimationProgress = 0f;
+    if (downCurrentPos.y < 0)
+    {
+        // Panel is already sliding down, calculate progress
+        float totalDownDistance = Mathf.Abs(downEndPos.y);
+        float currentDownDistance = Mathf.Abs(downCurrentPos.y);
+        downAnimationProgress = currentDownDistance / totalDownDistance;
+    }
+    
+    float elapsedTime = downAnimationProgress * animationDuration; // Start from where the down animation left off
+    
+    while (elapsedTime < animationDuration)
+    {
+        elapsedTime += Time.deltaTime;
+        float progress = elapsedTime / animationDuration;
+        float curveValue = slideCurve.Evaluate(progress);
+        
+        // Continue the down animation from where it was
+        float downProgress = Mathf.Clamp01((progress - downAnimationProgress) / (1f - downAnimationProgress));
+        downRect.anchoredPosition = Vector2.Lerp(downCurrentPos, downEndPos, downProgress);
+        
+        // Panel coming up slides up from below
+        upRect.anchoredPosition = Vector2.Lerp(upStartPos, upEndPos, curveValue);
+        
+        yield return null;
+    }
+    
+    // Finalize positions
+    downRect.anchoredPosition = downEndPos;
+    upRect.anchoredPosition = upEndPos;
+    
+    // Deactivate the panel that went down and reset its sorting order
+    panelGoingDown.SetActive(false);
+    SetPanelSortingOrder(panelGoingDown, 0);
+    
+    // Reset TabSelection sorting order to normal
+    SetPanelSortingOrder(panelComingUp, 0);
+    
+    isAnimating = false;
+    currentAnimation = null;
+    isTabSelectionSlideIn = false;
+}
     
     public void CloseMenu()
 {
-    if (isAnimating) return;
+    // Allow interruption if we're not already switching between tabs
+    if (isAnimating && currentActiveTab != null && !isTabSelectionSlideIn) 
+    {
+        return;
+    }
     
-    // NEW: Notify EquipmentManager about all menus closing
+    // NEW: Notify EquipmentManager about all menus closing BEFORE starting animations
     EquipmentManager equipmentManager = FindObjectOfType<EquipmentManager>();
     if (equipmentManager != null)
     {
@@ -170,13 +307,52 @@ public class MenuManager : MonoBehaviour
     }
     
     isMenuOpen = false;
-    isTabSelectionSlideIn = false; // Clear the flag
+    isTabSelectionSlideIn = false;
     
     // Close whichever panel is currently active
     GameObject panelToClose = currentActiveTab != null ? currentActiveTab : tabSelectionPanel;
+    
+    // Reset sorting order before closing and ensure proper layering
+    SetPanelSortingOrder(panelToClose, 0);
+    EnsureProperPanelLayering();
+    
     currentAnimation = StartCoroutine(SlideOutPanel(panelToClose, () => {
         currentActiveTab = null;
     }));
+}
+
+void EnsureProperPanelLayering()
+{
+    // Make sure all main panels have the same base sorting order
+    SetPanelSortingOrder(tabSelectionPanel, 0);
+    if (statsTabPanel != null) SetPanelSortingOrder(statsTabPanel, 0);
+    if (itemsTabPanel != null) SetPanelSortingOrder(itemsTabPanel, 0);
+    if (equipTabPanel != null) SetPanelSortingOrder(equipTabPanel, 0);
+    if (settingsTabPanel != null) SetPanelSortingOrder(settingsTabPanel, 0);
+    
+    // Find EquipmentManager and ensure detail panels are below main panels
+    EquipmentManager equipmentManager = FindObjectOfType<EquipmentManager>();
+    if (equipmentManager != null)
+    {
+        equipmentManager.EnsureDetailPanelsUnderMainPanels();
+    }
+}
+
+void SetPanelSortingOrder(GameObject panel, int sortingOrder)
+{
+    Canvas panelCanvas = panel.GetComponent<Canvas>();
+    if (panelCanvas == null)
+    {
+        panelCanvas = panel.AddComponent<Canvas>();
+        panelCanvas.overrideSorting = true;
+    }
+    panelCanvas.sortingOrder = sortingOrder;
+    
+    // Also add GraphicRaycaster if it doesn't exist
+    if (panel.GetComponent<GraphicRaycaster>() == null)
+    {
+        panel.AddComponent<GraphicRaycaster>();
+    }
 }
     
     public void OpenTab(GameObject tabToOpen)
