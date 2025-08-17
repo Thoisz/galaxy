@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections.Generic;
 
 public class PlayerMovement : MonoBehaviour
 {
@@ -13,6 +14,10 @@ public class PlayerMovement : MonoBehaviour
     [SerializeField] private float _moveSpeed = 8f;
     [SerializeField] private float _runningTurnSpeed = 15f;
     [SerializeField] private float _groundFrictionDamp = 10f;
+
+    [Header("Equipment Speed Modifiers")]
+    private float _baseMoveSpeed; // We'll set this from your current _moveSpeed value
+    private List<float> _speedModifiers = new List<float>();
     
     [Header("Wall Interaction")]
     [SerializeField] private float _wallCheckDistance = 0.6f;
@@ -35,12 +40,29 @@ public class PlayerMovement : MonoBehaviour
     // For preserving movement direction across gravity changes
     private Vector3 _lastValidMoveDirection = Vector3.forward;
 
+    // Singleton for easy access from other scripts
+    public static PlayerMovement instance;
+
     void Start()
 {
+    // Singleton setup
+    if (instance == null)
+    {
+        instance = this;
+    }
+    else
+    {
+        Destroy(gameObject);
+        return;
+    }
+
     _rigidbody = GetComponent<Rigidbody>();
     _gravityBody = GetComponent<GravityBody>();
     _playerCamera = FindObjectOfType<PlayerCamera>();
-    _playerDash = GetComponent<PlayerDash>(); // Add this line
+    _playerDash = GetComponent<PlayerDash>();
+
+    // Store the base speed from your inspector value
+    _baseMoveSpeed = _moveSpeed;
 
     // Create and apply frictionless material
     CreateAndApplyFrictionlessMaterial();
@@ -163,8 +185,8 @@ public class PlayerMovement : MonoBehaviour
     if (_worldMoveDirection.magnitude < 0.1f)
         return;
 
-    // Apply movement 
-    float currentSpeed = _moveSpeed;
+    // Calculate current speed with modifiers
+    float currentSpeed = GetCurrentMoveSpeed();
 
     // Calculate velocity change
     Vector3 targetVelocity = _worldMoveDirection * currentSpeed;
@@ -245,20 +267,21 @@ public class PlayerMovement : MonoBehaviour
     }
 
     private void UpdateAnimator()
-    {
-        if (_animator == null)
-            return;
+{
+    if (_animator == null)
+        return;
 
-        // Update ground state
-        _animator.SetBool("isGrounded", _isGrounded);
-        
-        // Update running state - now using input instead of velocity
-        _animator.SetBool("isRunning", _hasMovementInput);
-        
-        // Still track velocity for movement speed (affects animation speed)
-        float horizontalSpeed = GetHorizontalVelocity().magnitude;
-        _animator.SetFloat("moveSpeed", horizontalSpeed / _moveSpeed);
-    }
+    // Update ground state
+    _animator.SetBool("isGrounded", _isGrounded);
+    
+    // Update running state - now using input instead of velocity
+    _animator.SetBool("isRunning", _hasMovementInput);
+    
+    // Still track velocity for movement speed (affects animation speed)
+    float horizontalSpeed = GetHorizontalVelocity().magnitude;
+    float currentMaxSpeed = GetCurrentMoveSpeed();
+    _animator.SetFloat("moveSpeed", horizontalSpeed / currentMaxSpeed);
+}
 
     // Public methods that can be called from other scripts
     public bool IsGrounded()
@@ -279,6 +302,62 @@ public class PlayerMovement : MonoBehaviour
         // Otherwise return current (probably zero) direction
         return _worldMoveDirection;
     }
+
+    public void AddSpeedModifier(float modifier)
+{
+    _speedModifiers.Add(modifier);
+    Debug.Log($"Added speed modifier: +{modifier}. New speed: {GetCurrentMoveSpeed()}");
+}
+
+public void RemoveSpeedModifier(float modifier)
+{
+    _speedModifiers.Remove(modifier);
+    Debug.Log($"Removed speed modifier: -{modifier}. New speed: {GetCurrentMoveSpeed()}");
+}
+
+public float GetCurrentMoveSpeed()
+{
+    float totalSpeed = _baseMoveSpeed;
+    
+    // Add all speed modifiers
+    foreach (float modifier in _speedModifiers)
+    {
+        totalSpeed += modifier;
+    }
+    
+    // Ensure minimum speed
+    return Mathf.Max(totalSpeed, 0.1f);
+}
+
+public float GetBaseMoveSpeed()
+{
+    return _baseMoveSpeed;
+}
+
+// Optional: Method to test speed modifiers easily
+[ContextMenu("Test Speed Boost")]
+public void TestSpeedBoost()
+{
+    AddSpeedModifier(10f); // Much more noticeable!
+}
+
+[ContextMenu("Remove Speed Boost")]
+public void RemoveSpeedBoost()
+{
+    RemoveSpeedModifier(10f);
+}
+
+[ContextMenu("Test CRAZY Speed Boost")]
+public void TestCrazySpeedBoost()
+{
+    AddSpeedModifier(20f); // SUPER fast!
+}
+
+[ContextMenu("Remove CRAZY Speed Boost")]
+public void RemoveCrazySpeedBoost()
+{
+    RemoveSpeedModifier(20f);
+}
     
     public bool HasMovementInput()
     {

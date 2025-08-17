@@ -1,3 +1,5 @@
+// === REPLACE YOUR EXISTING EquipItemCardUI CLASS ===
+
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
@@ -6,7 +8,8 @@ public class EquipItemCardUI : MonoBehaviour
 {
     [Header("UI Components")]
     public Button cardButton;
-    public Transform model3DContainer; // Where the 3D model will be placed (for static image)
+    public Image itemIconImage; // The Image component that shows the 2D icon
+    public Transform model3DContainer; // Where the 3D model will be placed (for 3D preview if needed)
     
     private EquipableItem associatedItem;
     private EquipmentManager equipmentManager;
@@ -19,7 +22,10 @@ public class EquipItemCardUI : MonoBehaviour
         associatedItem = item;
         equipmentManager = manager;
         
-        // Setup 3D model for static image capture (implement later)
+        // Setup 2D icon
+        Setup2DIcon();
+        
+        // Setup 3D model (optional - for 3D preview)
         Setup3DModel();
         
         // Set up button click
@@ -30,48 +36,62 @@ public class EquipItemCardUI : MonoBehaviour
         }
     }
     
-    void Setup3DModel()
-{
-    // Clear any existing instantiated model first
-    if (instantiated3DModel != null)
+    void Setup2DIcon()
     {
-        DestroyImmediate(instantiated3DModel);
-        instantiated3DModel = null;
+        if (itemIconImage == null) return;
+        
+        // Check if this item has a 2D icon assigned
+        if (associatedItem != null && associatedItem.itemIcon != null)
+        {
+            // Set the 2D sprite
+            itemIconImage.sprite = associatedItem.itemIcon;
+            itemIconImage.gameObject.SetActive(true);
+        }
+        else
+        {
+            // No icon assigned - hide the image
+            itemIconImage.gameObject.SetActive(false);
+        }
     }
     
-    if (model3DContainer == null) return;
-    
-    // Check if this item has a 3D model assigned
-    if (associatedItem != null && associatedItem.item3DModel != null)
+    void Setup3DModel()
     {
-        // REPLACE the default booster shoes with this item's model
-        
-        // First, clear any existing children (the default booster shoes)
-        for (int i = model3DContainer.childCount - 1; i >= 0; i--)
+        // Clear any existing instantiated model first
+        if (instantiated3DModel != null)
         {
-            if (Application.isPlaying)
-                Destroy(model3DContainer.GetChild(i).gameObject);
-            else
-                DestroyImmediate(model3DContainer.GetChild(i).gameObject);
+            DestroyImmediate(instantiated3DModel);
+            instantiated3DModel = null;
         }
         
-        // Now instantiate the item's actual 3D model
-        instantiated3DModel = Instantiate(associatedItem.item3DModel, model3DContainer);
+        if (model3DContainer == null) return;
         
-        // Make sure it's positioned correctly
-        instantiated3DModel.transform.localPosition = Vector3.zero;
-        instantiated3DModel.transform.localRotation = Quaternion.identity;
-        instantiated3DModel.transform.localScale = Vector3.one;
-        
-        // Make sure the container is visible
-        model3DContainer.gameObject.SetActive(true);
+        // Check if this item has a 3D model assigned
+        if (associatedItem != null && associatedItem.item3DModel != null)
+        {
+            // Clear any existing children (placeholder models)
+            for (int i = model3DContainer.childCount - 1; i >= 0; i--)
+            {
+                if (Application.isPlaying)
+                    Destroy(model3DContainer.GetChild(i).gameObject);
+                else
+                    DestroyImmediate(model3DContainer.GetChild(i).gameObject);
+            }
+            
+            // Instantiate the item's actual 3D model (optional for 3D preview)
+            instantiated3DModel = Instantiate(associatedItem.item3DModel, model3DContainer);
+            instantiated3DModel.transform.localPosition = Vector3.zero;
+            instantiated3DModel.transform.localRotation = Quaternion.identity;
+            instantiated3DModel.transform.localScale = Vector3.one;
+            
+            model3DContainer.gameObject.SetActive(true);
+        }
+        else
+        {
+            // NO MODEL ASSIGNED - Hide the 3D container
+            if (model3DContainer != null)
+                model3DContainer.gameObject.SetActive(false);
+        }
     }
-    else
-    {
-        // NO MODEL ASSIGNED - Hide the entire container so no booster shoes show
-        model3DContainer.gameObject.SetActive(false);
-    }
-}
     
     void OnCardClicked()
     {
@@ -132,7 +152,7 @@ public class EquipItemCardUI : MonoBehaviour
     void OnDestroy()
     {
         // Clean up the 3D model when card is destroyed
-        if (instantiated3DModel != null && instantiated3DModel != null) // Check twice to prevent error
+        if (instantiated3DModel != null)
         {
             if (Application.isPlaying)
                 Destroy(instantiated3DModel);
@@ -141,7 +161,7 @@ public class EquipItemCardUI : MonoBehaviour
         }
         
         // Clean up rainbow background when card is destroyed
-        if (rainbowBackground != null && rainbowBackground != null) // Check twice to prevent error
+        if (rainbowBackground != null)
         {
             if (Application.isPlaying)
                 Destroy(rainbowBackground);

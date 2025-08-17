@@ -15,8 +15,11 @@ public class EquipableItem
     public EquipmentRarity rarity;
     public bool isEquipped = false;
     
+    [Header("UI Display")]
+    public Sprite itemIcon; // 2D image for the item card UI
+    
     [Header("3D Model")]
-    public GameObject item3DModel; // The 3D model for spinning render
+    public GameObject item3DModel; // The 3D model that spawns on player when equipped
     
     [Header("Weapon Stats (if applicable)")]
     public int damage = 0;
@@ -26,9 +29,13 @@ public class EquipableItem
     [Header("Accessory Bonuses (if applicable)")]
     public int healthBonus = 0;
     public int staminaBonus = 0;
-    public float speedBonus = 0f; // NEW: Speed bonus for items like booster shoes
+    public float speedBonus = 0f; // Speed bonus for items like booster shoes
     public string[] specialAbilities; // Array of special bonus descriptions
-
+    
+    [Header("Equipment Tweaks (Applied Permanently)")]
+    public Vector3 appliedScaleTweak = Vector3.one;
+    public Vector3 appliedPositionTweak = Vector3.zero;
+    public Vector3 appliedRotationTweak = Vector3.zero;
 }
 
 public enum EquipmentCategory
@@ -50,6 +57,11 @@ public class EquipmentManager : MonoBehaviour
 {
     [Header("Equipment Database")]
     public List<EquipableItem> playerEquipment = new List<EquipableItem>();
+
+    [Header("Equipment Tweaks (Applied Permanently)")]
+    public Vector3 appliedScaleTweak = Vector3.one;
+    public Vector3 appliedPositionTweak = Vector3.zero;
+    public Vector3 appliedRotationTweak = Vector3.zero;
     
     [Header("UI References")]
     public Transform itemsContainer; // The Content object of the ScrollView
@@ -474,6 +486,18 @@ void SetDetailPanelSortingOrder(GameObject panel, int sortingOrder)
     currentActiveDetailPanel = null;
     isDetailPanelAnimating = false;
     currentDetailAnimation = null;
+}
+
+public EquipableItem FindEquippedItemByName(string itemName)
+{
+    if (equippedMeleeWeapon != null && equippedMeleeWeapon.itemName == itemName)
+        return equippedMeleeWeapon;
+    if (equippedRangedWeapon != null && equippedRangedWeapon.itemName == itemName)
+        return equippedRangedWeapon;
+    if (equippedAccessory != null && equippedAccessory.itemName == itemName)
+        return equippedAccessory;
+    
+    return null;
 }
 
 string GetFilterLabelText(int selectedIndex)
@@ -1058,25 +1082,17 @@ string GetFilterLabelText(int selectedIndex)
     
     void SpawnEquippedItem(EquipableItem item)
 {
-    // This is where you'd instantiate the actual 3D model on your player
-    
-    // NEW: For booster shoes, you could do something like:
-    if (item.itemName.ToLower().Contains("booster") && item.category == EquipmentCategory.Accessory)
+    if (PlayerEquipment.instance != null)
     {
-        // Here you would modify player's movement speed
-        // PlayerController.instance.AddSpeedModifier(item.speedBonus);
+        PlayerEquipment.instance.EquipItem(item);
     }
 }
     
     void RemoveEquippedItem(EquipableItem item)
 {
-    // This is where you'd remove the 3D model from your player
-    
-    // NEW: For booster shoes, remove speed boost
-    if (item.itemName.ToLower().Contains("booster") && item.category == EquipmentCategory.Accessory)
+    if (PlayerEquipment.instance != null)
     {
-        // Here you would remove player's movement speed modifier
-        // PlayerController.instance.RemoveSpeedModifier(item.speedBonus);
+        PlayerEquipment.instance.UnequipItem(item);
     }
 }
     
