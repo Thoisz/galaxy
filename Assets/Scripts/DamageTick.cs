@@ -82,25 +82,24 @@ public class DamageTick : MonoBehaviour
     }
     
     private IEnumerator DealDamageOverTime(PlayerHealth targetHealth)
+{
+    while (true)
     {
-        while (true)
+        if (targetHealth != null && !targetHealth.IsDead())
         {
-            // Deal damage
-            if (targetHealth != null && !targetHealth.IsDead())
+            // Call the tick-specific method
+            targetHealth.TakeTickDamage(damageAmount);
+
+            // Play damage sound
+            if (audioSource != null && damageSound != null)
             {
-                targetHealth.TakeDamage(damageAmount);
-                
-                // Play damage sound
-                if (audioSource != null && damageSound != null)
-                {
-                    audioSource.Play();
-                }
+                audioSource.Play();
             }
-            
-            // Wait for the next damage tick
-            yield return new WaitForSeconds(damageInterval);
         }
+
+        yield return new WaitForSeconds(damageInterval);
     }
+}
     
     // Clean up if object is destroyed while someone is in the damage zone
     void OnDestroy()

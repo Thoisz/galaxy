@@ -7,6 +7,7 @@ TagManager:
   - Ground
   - GameObject
   - FollowCamera
+  - PortraitCamera
   layers:
   - Default
   - TransparentFX
@@ -18,7 +19,7 @@ TagManager:
   - 
   - LocalPlayer
   - LocayPlayerInvisible
-  - 
+  - Portrait
   - 
   - 
   - 

@@ -22,7 +22,10 @@ public class PlayerHealth : MonoBehaviour
     [Header("Damage Effects")]
     public Color damageFlashColor = Color.red;
     public float damageFlashDuration = 0.2f;
-    
+
+    [Header("Portrait (UI)")]
+    public PortraitDriver portrait;
+
     // Private variables
     private float lastDamageTime;
     private bool isRegenerating = false;
@@ -124,6 +127,12 @@ public class PlayerHealth : MonoBehaviour
         
         // Trigger damage flash effect
         TriggerDamageFlash();
+
+        if (portrait != null && damage > 0f)
+    {
+        portrait.PlayHurt();   // <-- this is the entire call from PlayerHealth
+    }
+
         
         // Check for death
         if (currentHealth <= 0)
@@ -133,6 +142,17 @@ public class PlayerHealth : MonoBehaviour
         
         Debug.Log($"Player took {damage} damage. Health: {currentHealth}/{maxHealth}");
     }
+
+    public void TakeTickDamage(float damage)
+    {
+        // Re-use existing logic
+        TakeDamage(damage);
+
+        // Portrait only reacts to tick damage
+        if (portrait != null && damage > 0f)
+        portrait.PlayHurt();
+    }
+
     
     public void Heal(float healAmount)
     {
@@ -211,7 +231,7 @@ public class PlayerHealth : MonoBehaviour
         // Update health text
         if (healthBarText != null)
         {
-            healthBarText.text = $"Health {Mathf.RoundToInt(displayedHealth)}/{Mathf.RoundToInt(maxHealth)}";
+            healthBarText.text = $"{Mathf.RoundToInt(displayedHealth)}/{Mathf.RoundToInt(maxHealth)}";
         }
     }
     

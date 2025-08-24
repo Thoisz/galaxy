@@ -240,6 +240,39 @@ void SetDetailPanelSortingOrder(GameObject panel, int sortingOrder)
     // Update card states
     UpdateAllCardStates();
 }
+
+private void ApplyItemBonuses(EquipableItem item)
+{
+    // Apply speed bonus
+    if (item.speedBonus > 0)
+    {
+        if (PlayerMovement.instance != null)
+        {
+            PlayerMovement.instance.AddSpeedModifier(item.speedBonus);
+            Debug.Log($"Applied speed bonus: +{item.speedBonus} from {item.itemName}");
+        }
+    }
+    
+    // Here you can add other bonuses like:
+    // - Health bonus
+    // - Stamina bonus
+    // - Special abilities
+}
+
+private void RemoveItemBonuses(EquipableItem item)
+{
+    // Remove speed bonus
+    if (item.speedBonus > 0)
+    {
+        if (PlayerMovement.instance != null)
+        {
+            PlayerMovement.instance.RemoveSpeedModifier(item.speedBonus);
+            Debug.Log($"Removed speed bonus: -{item.speedBonus} from {item.itemName}");
+        }
+    }
+    
+    // Here you can remove other bonuses
+}
     
     // NEW METHOD: Reset all detail panels to original positions
     void ResetAllDetailPanels()
@@ -730,6 +763,9 @@ string GetFilterLabelText(int selectedIndex)
     
     item.isEquipped = true;
     
+    // ADD THIS LINE:
+    ApplyItemBonuses(item);
+    
     // Update equip button after equipping
     UpdateEquipButton();
     
@@ -743,6 +779,9 @@ string GetFilterLabelText(int selectedIndex)
     public void UnequipItem(EquipableItem item)
 {
     item.isEquipped = false;
+    
+    // ADD THIS LINE:
+    RemoveItemBonuses(item);
     
     switch (item.category)
     {

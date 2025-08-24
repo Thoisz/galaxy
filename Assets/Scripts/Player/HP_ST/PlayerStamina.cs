@@ -161,7 +161,7 @@ public class PlayerStamina : MonoBehaviour
         // Update stamina text
         if (staminaBarText != null)
         {
-            staminaBarText.text = $"Energy {Mathf.RoundToInt(displayedStamina)}/{Mathf.RoundToInt(maxStamina)}";
+            staminaBarText.text = $"{Mathf.RoundToInt(displayedStamina)}/{Mathf.RoundToInt(maxStamina)}";
         }
     }
     
