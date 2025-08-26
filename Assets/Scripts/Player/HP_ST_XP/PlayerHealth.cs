@@ -1,3 +1,4 @@
+// Assets/Scripts/Player/HP_ST/PlayerHealth.cs
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -6,19 +7,19 @@ public class PlayerHealth : MonoBehaviour
     [Header("Health Settings")]
     public float maxHealth = 100f;
     public float currentHealth;
-    
+
     [Header("Health Regeneration")]
-    public float healthRegenTime = 10f; // Time in seconds to fully regenerate from 0 to max
-    public float healthRegenDelay = 3f; // Delay before regen starts after taking damage
-    public bool canRegenerateHealth = true; // Toggle for health regen
-    
+    public float healthRegenTime = 10f;
+    public float healthRegenDelay = 3f;
+    public bool canRegenerateHealth = true;
+
     [Header("UI References")]
     public Image healthBarFill;
     public TMPro.TextMeshProUGUI healthBarText;
-    
+
     [Header("UI Animation")]
-    public float barAnimationSpeed = 6f; // How fast the bar animates
-    
+    public float barAnimationSpeed = 6f;
+
     [Header("Damage Effects")]
     public Color damageFlashColor = Color.red;
     public float damageFlashDuration = 0.2f;
@@ -26,46 +27,48 @@ public class PlayerHealth : MonoBehaviour
     [Header("Portrait (UI)")]
     public PortraitDriver portrait;
 
-    // Private variables
+    // Private
     private float lastDamageTime;
     private bool isRegenerating = false;
-    private float displayedHealth; // What the bar currently shows
-    private float targetHealth; // What the bar should show
-    private float actualRegenRate; // Calculated regen rate based on max health
+    private float displayedHealth;
+    private float targetHealth;
+    private float actualRegenRate;
     private bool isDead = false;
-    
-    // Flash effect variables
+
+    // Flash effect
     private Image healthBarImage;
     private Color originalHealthBarColor;
     private bool isFlashing = false;
     private float flashTimer = 0f;
-    
+
     void Start()
     {
         currentHealth = maxHealth;
         displayedHealth = maxHealth;
         targetHealth = maxHealth;
-        lastDamageTime = -healthRegenDelay; // Allow immediate regen at start
-        
-        // Calculate the actual regen rate based on max health
+        lastDamageTime = -healthRegenDelay;
+
         actualRegenRate = maxHealth / healthRegenTime;
-        
-        // Store original health bar color for flash effect
+
         if (healthBarFill != null)
         {
             healthBarImage = healthBarFill;
             originalHealthBarColor = healthBarFill.color;
         }
-        
+
         UpdateHealthBar();
+
+        // report to portrait once at start
+        if (portrait != null)
+            portrait.SetHealthPercent(currentHealth / Mathf.Max(1f, maxHealth));
     }
-    
+
     void Update()
     {
-        // Recalculate regen rate if max health changes
+        // Keep regen rate in sync with maxHealth
         actualRegenRate = maxHealth / healthRegenTime;
-        
-        // Handle health regeneration
+
+        // Regen
         if (canRegenerateHealth && !isDead && Time.time - lastDamageTime >= healthRegenDelay)
         {
             if (currentHealth < maxHealth)
@@ -82,89 +85,71 @@ public class PlayerHealth : MonoBehaviour
         {
             isRegenerating = false;
         }
-        
-        // Handle damage flash effect
-        if (isFlashing)
-        {
-            UpdateDamageFlash();
-        }
-        
-        // Smoothly animate the bar towards the target
+
+        // Damage flash
+        if (isFlashing) UpdateDamageFlash();
+
+        // Health bar animation
         AnimateHealthBar();
+
+        // continuously report health % to portrait
+        if (portrait != null)
+            portrait.SetHealthPercent(currentHealth / Mathf.Max(1f, maxHealth));
     }
-    
+
     private void RegenerateHealth()
     {
         currentHealth += actualRegenRate * Time.deltaTime;
         currentHealth = Mathf.Clamp(currentHealth, 0, maxHealth);
         targetHealth = currentHealth;
     }
-    
+
     private void AnimateHealthBar()
     {
-        // Smoothly move displayed health towards target
         if (Mathf.Abs(displayedHealth - targetHealth) > 0.1f)
-        {
             displayedHealth = Mathf.Lerp(displayedHealth, targetHealth, barAnimationSpeed * Time.deltaTime);
-            UpdateHealthBarVisual();
-        }
         else
-        {
-            // Snap to target when very close to avoid infinite lerping
             displayedHealth = targetHealth;
-            UpdateHealthBarVisual();
-        }
+
+        UpdateHealthBarVisual();
     }
-    
+
     public void TakeDamage(float damage)
     {
         if (isDead) return;
-        
+
         currentHealth -= damage;
         currentHealth = Mathf.Clamp(currentHealth, 0, maxHealth);
         targetHealth = currentHealth;
         lastDamageTime = Time.time;
-        
-        // Trigger damage flash effect
+
         TriggerDamageFlash();
 
-        if (portrait != null && damage > 0f)
-    {
-        portrait.PlayHurt();   // <-- this is the entire call from PlayerHealth
-    }
+        // (Hurt plays only for tick/lava via TakeTickDamage)
+        if (currentHealth <= 0) Die();
 
-        
-        // Check for death
-        if (currentHealth <= 0)
-        {
-            Die();
-        }
-        
         Debug.Log($"Player took {damage} damage. Health: {currentHealth}/{maxHealth}");
     }
 
     public void TakeTickDamage(float damage)
     {
-        // Re-use existing logic
+        // Apply normal damage logic
         TakeDamage(damage);
 
-        // Portrait only reacts to tick damage
+        // Portrait reacts only to tick/lava damage
         if (portrait != null && damage > 0f)
-        portrait.PlayHurt();
+            portrait.PlayHurt();
     }
 
-    
     public void Heal(float healAmount)
     {
         if (isDead) return;
-        
+
         currentHealth += healAmount;
         currentHealth = Mathf.Clamp(currentHealth, 0, maxHealth);
         targetHealth = currentHealth;
-        
-        Debug.Log($"Player healed for {healAmount}. Health: {currentHealth}/{maxHealth}");
     }
-    
+
     private void TriggerDamageFlash()
     {
         if (healthBarImage != null)
@@ -173,38 +158,31 @@ public class PlayerHealth : MonoBehaviour
             flashTimer = 0f;
         }
     }
-    
+
     private void UpdateDamageFlash()
     {
         flashTimer += Time.deltaTime;
-        
+
         if (flashTimer >= damageFlashDuration)
         {
-            // End flash
             isFlashing = false;
             healthBarImage.color = originalHealthBarColor;
         }
         else
         {
-            // Flash between original and damage color
-            float flashProgress = flashTimer / damageFlashDuration;
-            Color currentColor = Color.Lerp(damageFlashColor, originalHealthBarColor, flashProgress);
-            healthBarImage.color = currentColor;
+            float t = flashTimer / damageFlashDuration;
+            healthBarImage.color = Color.Lerp(damageFlashColor, originalHealthBarColor, t);
         }
     }
-    
+
     private void Die()
     {
         isDead = true;
         isRegenerating = false;
-        
         Debug.Log("Player died!");
-        
-        // You can add death effects here later
-        // For now, let's respawn after a delay
-        Invoke("Respawn", 2f);
+        Invoke(nameof(Respawn), 2f);
     }
-    
+
     private void Respawn()
     {
         isDead = false;
@@ -212,43 +190,33 @@ public class PlayerHealth : MonoBehaviour
         targetHealth = maxHealth;
         displayedHealth = maxHealth;
         lastDamageTime = Time.time;
-        
         Debug.Log("Player respawned!");
     }
-    
-    private void UpdateHealthBar()
-    {
-        targetHealth = currentHealth;
-    }
-    
+
+    private void UpdateHealthBar() => targetHealth = currentHealth;
+
     private void UpdateHealthBarVisual()
     {
         if (healthBarFill != null)
-        {
             healthBarFill.fillAmount = displayedHealth / maxHealth;
-        }
-        
-        // Update health text
+
         if (healthBarText != null)
-        {
             healthBarText.text = $"{Mathf.RoundToInt(displayedHealth)}/{Mathf.RoundToInt(maxHealth)}";
-        }
     }
-    
-    // Public method to update max health (for leveling up)
+
     public void SetMaxHealth(float newMaxHealth)
     {
-        float healthPercentage = currentHealth / maxHealth; // Save current percentage
+        float healthPercentage = currentHealth / maxHealth;
         maxHealth = newMaxHealth;
-        currentHealth = maxHealth * healthPercentage; // Maintain same percentage
-        actualRegenRate = maxHealth / healthRegenTime; // Recalculate regen rate
+        currentHealth = maxHealth * healthPercentage;
+        actualRegenRate = maxHealth / healthRegenTime;
         UpdateHealthBar();
     }
-    
-    // Public getters
-    public float GetCurrentHealth() { return currentHealth; }
-    public float GetMaxHealth() { return maxHealth; }
-    public float GetHealthPercentage() { return currentHealth / maxHealth; }
-    public bool IsRegenerating() { return isRegenerating; }
-    public bool IsDead() { return isDead; }
+
+    // getters
+    public float GetCurrentHealth() => currentHealth;
+    public float GetMaxHealth() => maxHealth;
+    public float GetHealthPercentage() => currentHealth / maxHealth;
+    public bool IsRegenerating() => isRegenerating;
+    public bool IsDead() => isDead;
 }

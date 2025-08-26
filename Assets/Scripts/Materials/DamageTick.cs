@@ -5,8 +5,13 @@ using System.Collections.Generic;
 public class DamageTick : MonoBehaviour
 {
     [Header("Damage Settings")]
-    public float damageAmount = 20f;
-    public float damageInterval = 0.5f; // Time between damage ticks
+    public float damageAmount = 20f;            // flat damage per tick
+    public float damageInterval = 0.5f;         // seconds between ticks
+    
+    [Tooltip("If true, apply damage as % of player's max health instead of flat.")]
+    public bool usePercentageDamage = false;
+    [Range(0f, 1f)]
+    public float percentagePerTick = 0.2f;      // e.g. 0.2 = 20% of maxHealth per tick
     
     [Header("Effects")]
     public Color gizmoColor = Color.red;
@@ -15,134 +20,109 @@ public class DamageTick : MonoBehaviour
     [Header("Audio")]
     public AudioClip damageSound;
     public float soundVolume = 0.5f;
-    
-    // Private variables
+
+    // Private
     private HashSet<GameObject> objectsInDamageZone = new HashSet<GameObject>();
     private Dictionary<GameObject, Coroutine> damageCoroutines = new Dictionary<GameObject, Coroutine>();
     private AudioSource audioSource;
-    
+
     void Start()
     {
-        // Create audio source for damage sounds
         if (damageSound != null)
         {
             audioSource = gameObject.AddComponent<AudioSource>();
             audioSource.clip = damageSound;
             audioSource.volume = soundVolume;
             audioSource.playOnAwake = false;
-            audioSource.spatialBlend = 1.0f; // 3D sound
+            audioSource.spatialBlend = 1.0f;
         }
-        
-        // Ensure we have a collider set as trigger
+
         Collider col = GetComponent<Collider>();
-        if (col != null)
-        {
-            col.isTrigger = true;
-        }
-        else
-        {
-            Debug.LogWarning("DamageTick: No collider found! Please add a collider and set it as trigger.");
-        }
+        if (col != null) col.isTrigger = true;
+        else Debug.LogWarning("DamageTick: No collider found! Please add a trigger collider.");
     }
-    
+
     void OnTriggerEnter(Collider other)
     {
-        // Check if the object has a PlayerHealth component
         PlayerHealth playerHealth = other.GetComponent<PlayerHealth>();
         if (playerHealth != null && !objectsInDamageZone.Contains(other.gameObject))
         {
             objectsInDamageZone.Add(other.gameObject);
-            
-            // Start damage coroutine for this object
             Coroutine damageCoroutine = StartCoroutine(DealDamageOverTime(playerHealth));
             damageCoroutines[other.gameObject] = damageCoroutine;
-            
             Debug.Log($"Player entered damage zone: {gameObject.name}");
         }
     }
-    
+
     void OnTriggerExit(Collider other)
     {
         if (objectsInDamageZone.Contains(other.gameObject))
         {
             objectsInDamageZone.Remove(other.gameObject);
-            
-            // Stop damage coroutine for this object
             if (damageCoroutines.ContainsKey(other.gameObject))
             {
                 if (damageCoroutines[other.gameObject] != null)
-                {
                     StopCoroutine(damageCoroutines[other.gameObject]);
-                }
                 damageCoroutines.Remove(other.gameObject);
             }
-            
             Debug.Log($"Player left damage zone: {gameObject.name}");
         }
     }
-    
+
     private IEnumerator DealDamageOverTime(PlayerHealth targetHealth)
-{
-    while (true)
     {
-        if (targetHealth != null && !targetHealth.IsDead())
+        while (true)
         {
-            // Call the tick-specific method
-            targetHealth.TakeTickDamage(damageAmount);
-
-            // Play damage sound
-            if (audioSource != null && damageSound != null)
+            if (targetHealth != null && !targetHealth.IsDead())
             {
-                audioSource.Play();
-            }
-        }
+                float damageToApply = damageAmount;
 
-        yield return new WaitForSeconds(damageInterval);
+                if (usePercentageDamage)
+                {
+                    damageToApply = targetHealth.GetMaxHealth() * percentagePerTick;
+                }
+
+                targetHealth.TakeTickDamage(damageToApply);
+
+                if (audioSource != null && damageSound != null)
+                    audioSource.Play();
+            }
+
+            yield return new WaitForSeconds(damageInterval);
+        }
     }
-}
-    
-    // Clean up if object is destroyed while someone is in the damage zone
+
     void OnDestroy()
     {
         foreach (var coroutine in damageCoroutines.Values)
         {
-            if (coroutine != null)
-            {
-                StopCoroutine(coroutine);
-            }
+            if (coroutine != null) StopCoroutine(coroutine);
         }
         damageCoroutines.Clear();
         objectsInDamageZone.Clear();
     }
-    
-    // Draw gizmo to visualize damage zone in editor
+
     void OnDrawGizmos()
     {
         if (showGizmo)
         {
             Gizmos.color = gizmoColor;
-            
             Collider col = GetComponent<Collider>();
             if (col != null)
             {
-                // Draw based on collider type
-                if (col is BoxCollider)
+                if (col is BoxCollider boxCol)
                 {
-                    BoxCollider boxCol = (BoxCollider)col;
                     Gizmos.matrix = Matrix4x4.TRS(transform.position, transform.rotation, transform.lossyScale);
                     Gizmos.DrawWireCube(boxCol.center, boxCol.size);
                 }
-                else if (col is SphereCollider)
+                else if (col is SphereCollider sphereCol)
                 {
-                    SphereCollider sphereCol = (SphereCollider)col;
                     Gizmos.matrix = Matrix4x4.TRS(transform.position, transform.rotation, transform.lossyScale);
                     Gizmos.DrawWireSphere(sphereCol.center, sphereCol.radius);
                 }
-                else if (col is CapsuleCollider)
+                else if (col is CapsuleCollider capsuleCol)
                 {
-                    CapsuleCollider capsuleCol = (CapsuleCollider)col;
                     Gizmos.matrix = Matrix4x4.TRS(transform.position, transform.rotation, transform.lossyScale);
-                    // Unity doesn't have a built-in wire capsule, so draw a sphere for now
                     Gizmos.DrawWireSphere(capsuleCol.center, capsuleCol.radius);
                 }
             }
