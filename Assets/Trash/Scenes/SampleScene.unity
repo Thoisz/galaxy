@@ -157,7 +157,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 1, y: 0.5}
   m_AnchorMax: {x: 1, y: 0.5}
-  m_AnchoredPosition: {x: -255.85, y: 0}
+  m_AnchoredPosition: {x: -450, y: 0}
   m_SizeDelta: {x: 200, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &5312479
@@ -214,7 +214,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 1
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 2
   m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
@@ -1390,7 +1390,7 @@ RectTransform:
   m_GameObject: {fileID: 139348642}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 4.5, y: 2.6, z: 2.6}
+  m_LocalScale: {x: 3.5, y: 2.3, z: 2.6}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 2053647457}
@@ -1694,9 +1694,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 50ea26a264e334b4eb35ad3fc4520241, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  xpAmount: 80
-  grantOnce: 1
-  destroyOnGrant: 1
+  xpAmount: 100
+  grantOnce: 0
+  destroyOnGrant: 0
   requiredTag: Player
 --- !u!65 &174350361
 BoxCollider:
@@ -1958,7 +1958,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 1, y: 0.5}
   m_AnchorMax: {x: 1, y: 0.5}
-  m_AnchoredPosition: {x: -255.85, y: 0}
+  m_AnchoredPosition: {x: -450, y: 0}
   m_SizeDelta: {x: 200, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &220138277
@@ -2015,7 +2015,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 1
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 2
   m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
@@ -2092,7 +2092,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 1, y: 0.5}
   m_AnchorMax: {x: 1, y: 0.5}
-  m_AnchoredPosition: {x: -255.85, y: 0}
+  m_AnchoredPosition: {x: -450, y: 0}
   m_SizeDelta: {x: 200, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &238659136
@@ -2149,7 +2149,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 1
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 2
   m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
@@ -2226,7 +2226,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 1, y: 0.5}
   m_AnchorMax: {x: 1, y: 0.5}
-  m_AnchoredPosition: {x: -255.85, y: 0}
+  m_AnchoredPosition: {x: -450, y: 0}
   m_SizeDelta: {x: 200, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &244811882
@@ -2283,7 +2283,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 1
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 2
   m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
@@ -2811,7 +2811,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 50ea26a264e334b4eb35ad3fc4520241, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  xpAmount: 80
+  xpAmount: 5000000
   grantOnce: 0
   destroyOnGrant: 0
   requiredTag: Player
@@ -4054,34 +4054,6 @@ MonoBehaviour:
   _transitionSpeedRecoveryRate: 10
   _transitionOrientationSpeed: 15
   _enableTransitionDebugLogs: 0
---- !u!114 &636263568
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 636263551}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: eb82f66540daa2341967fe26372778e5, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  maxStamina: 50
-  currentStamina: 0
-  dashStaminaCost: 26
-  jumpStaminaCost: 26
-  staminaRegenDelay: 0.4
-  ticksPerSecond: 3
-  tickFraction: 0.03
-  staminaBarFill: {fileID: 380022262}
-  staminaBarText: {fileID: 1316980416}
-  barAnimationSpeed: 8
-  portrait: {fileID: 573986627}
-  lastStaminaUseTime: 0
-  isRegenerating: 0
-  displayedStamina: 0
-  targetStamina: 0
-  regenAccumulator: 0
 --- !u!114 &636263569
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -4094,6 +4066,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1f6fdbef3ebc49b46b0fe6b6d0f9c1f5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  baseHealth: 200
+  healthPerPoint: 24
+  healthSkillPoints: 0
   maxHealth: 100
   currentHealth: 0
   healthRegenTime: 10
@@ -4186,7 +4161,14 @@ MonoBehaviour:
   xpInLevel: 0
   xpToNextLevel: 100
   baseXPAtLevel0: 100
-  levelXPGrowth: 1.2
+  levelCap: 200
+  linearPerLevel: 150
+  quadraticPerLevel: 8
+  cubicPerLevel: 0
+  skillPointsPerLevel: 3
+  OnSkillPointsEarned:
+    m_PersistentCalls:
+      m_Calls: []
   xpFillImage: {fileID: 192701194}
   levelText: {fileID: 1051118287}
   xpDetailText: {fileID: 2078317407}
@@ -4213,13 +4195,16 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 5d3d64ff2ecb1b243aff002f101cd716, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  baseStamina: 50
+  staminaPerPoint: 7
+  staminaSkillPoints: 0
   maxStamina: 100
   currentStamina: 0
-  dashStaminaCost: 26
-  jumpStaminaCost: 26
+  dashStaminaCost: 25
+  jumpStaminaCost: 25
   staminaRegenDelay: 1
   ticksPerSecond: 3
-  tickFraction: 0.01
+  tickFraction: 0.03
   staminaBarFill: {fileID: 380022262}
   staminaBarText: {fileID: 1316980416}
   barAnimationSpeed: 8
@@ -4415,8 +4400,8 @@ MonoBehaviour:
   m_TargetGraphic: {fileID: 66724683}
   m_HandleRect: {fileID: 66724682}
   m_Direction: 0
-  m_Value: 0
-  m_Size: 1
+  m_Value: 1
+  m_Size: 0.9999999
   m_NumberOfSteps: 0
   m_OnValueChanged:
     m_PersistentCalls:
@@ -6487,6 +6472,7 @@ MonoBehaviour:
   preserveDirectionDuringTransition: 1
   directionBlendTime: 0.5
   transitionStabilizationTime: 0.2
+  _recenterSpeed: 1000
 --- !u!4 &1019612834
 Transform:
   m_ObjectHideFlags: 0
@@ -6917,7 +6903,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 1, y: 0.5}
   m_AnchorMax: {x: 1, y: 0.5}
-  m_AnchoredPosition: {x: -255.85, y: 0}
+  m_AnchoredPosition: {x: -450, y: 0}
   m_SizeDelta: {x: 200, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1064894574
@@ -6974,7 +6960,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 1
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 2
   m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
@@ -8031,16 +8017,20 @@ MonoBehaviour:
   rangedPlusButton: {fileID: 835713821}
   magicPlusButton: {fileID: 43293724}
   menuCloseButton: {fileID: 1936490346}
-  availablePoints: 10
-  vitalityLevel: 1
-  healthLevel: 1
+  maxPointsPerStat: 200
+  availablePoints: 0
+  vitalityLevel: 0
+  healthLevel: 0
   meleeLevel: 1
   rangedLevel: 1
   magicLevel: 1
-  staminaPerVitality: 5
-  healthPerHealthStat: 5
+  playerExperience: {fileID: 636263571}
   playerHealth: {fileID: 636263569}
-  playerStamina: {fileID: 636263568}
+  playerStamina: {fileID: 636263572}
+  holdInitialDelay: 0.35
+  holdStartInterval: 0.12
+  holdMinInterval: 0.03
+  holdAccelMultiplier: 0.88
 --- !u!1 &1214659022
 GameObject:
   m_ObjectHideFlags: 0
@@ -8723,9 +8713,6 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: f248ae032277cde4cb4e5caf1d92c2cb, type: 3}
       insertIndex: -1
       addedObject: {fileID: 636263569}
-    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: f248ae032277cde4cb4e5caf1d92c2cb, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 636263568}
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: f248ae032277cde4cb4e5caf1d92c2cb, type: 3}
       insertIndex: -1
       addedObject: {fileID: 636263572}
@@ -15084,14 +15071,14 @@ RectTransform:
   m_GameObject: {fileID: 2078317405}
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1.2, y: 1.2, z: 1.2}
+  m_LocalScale: {x: 1, y: 1.2, z: 1.2}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 886456363}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 203.29999, y: 127.599976}
+  m_AnchoredPosition: {x: 205.2, y: 127.6}
   m_SizeDelta: {x: 197.07, y: 18}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &2078317407

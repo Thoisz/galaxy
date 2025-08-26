@@ -1,10 +1,22 @@
+// Assets/Scripts/Player/PlayerStamina.cs
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 
 public class PlayerStamina : MonoBehaviour
 {
     [Header("Stamina Settings")]
-    public float maxStamina = 100f;
+    [Tooltip("Base stamina at 0 skill points.")]
+    public float baseStamina = 50f;
+
+    [Tooltip("How much stamina each skill point adds.")]
+    public float staminaPerPoint = 7f; // 50 + (200 * 7) = 1450 ≈ 1500
+
+    [Tooltip("How many skill points are currently invested into Stamina.")]
+    public int staminaSkillPoints = 0;
+
+    [Tooltip("Current maximum stamina after scaling.")]
+    public float maxStamina = 50f;
     public float currentStamina;
 
     [Header("Stamina Costs")]
@@ -19,7 +31,7 @@ public class PlayerStamina : MonoBehaviour
 
     [Header("UI References")]
     public Image staminaBarFill;
-    public TMPro.TextMeshProUGUI staminaBarText;
+    public TextMeshProUGUI staminaBarText;
 
     [Header("UI Animation")]
     public float barAnimationSpeed = 8f; // Lerp speed for the bar
@@ -42,22 +54,21 @@ public class PlayerStamina : MonoBehaviour
 
     void Start()
     {
+        RecalculateMaxStamina(); // apply scaling at start
+
         currentStamina = maxStamina;
         displayedStamina = maxStamina;
         targetStamina = maxStamina;
-        lastStaminaUseTime = -staminaRegenDelay; // Allow immediate regen at start
+        lastStaminaUseTime = -staminaRegenDelay;
 
-        // Get component references (if used elsewhere)
         playerDash = GetComponent<PlayerDash>();
         playerJump = GetComponent<PlayerJump>();
 
         UpdateStaminaBar();
 
-        // Reset portrait expression
+        // UPDATED: drive portrait with absolute stamina points
         if (portrait != null)
-        {
-            portrait.SetStaminaPercent(1f); // start with full stamina
-        }
+            portrait.SetStaminaPoints(currentStamina); // start with full stamina (points)
     }
 
     void Update()
@@ -65,11 +76,10 @@ public class PlayerStamina : MonoBehaviour
         HandleRegenTicks();
         AnimateStaminaBar();
 
-        // Drive portrait with stamina percentage (0..1)
-        if (portrait != null && maxStamina > 0f)
+        // UPDATED: always push absolute stamina points to the portrait
+        if (portrait != null)
         {
-            float pct = currentStamina / maxStamina;
-            portrait.SetStaminaPercent(pct);
+            portrait.SetStaminaPoints(currentStamina);
         }
     }
 
@@ -144,7 +154,7 @@ public class PlayerStamina : MonoBehaviour
         currentStamina = Mathf.Clamp(currentStamina - amount, 0, maxStamina);
         targetStamina = currentStamina;
         lastStaminaUseTime = Time.time;
-        regenAccumulator = 0f; // reset regen accumulation
+        regenAccumulator = 0f;
     }
 
     public void RestoreStamina(float amount)
@@ -162,24 +172,45 @@ public class PlayerStamina : MonoBehaviour
     private void UpdateStaminaBarVisual()
     {
         if (staminaBarFill != null)
-            staminaBarFill.fillAmount = displayedStamina / maxStamina;
+            staminaBarFill.fillAmount = (maxStamina > 0f) ? displayedStamina / maxStamina : 0f;
 
         if (staminaBarText != null)
             staminaBarText.text = $"{Mathf.RoundToInt(displayedStamina)}/{Mathf.RoundToInt(maxStamina)}";
     }
 
-    public void SetMaxStamina(float newMaxStamina)
+    /// <summary>
+    /// Recalculates max stamina based on invested skill points.
+    /// </summary>
+    public void RecalculateMaxStamina()
     {
         float staminaPercentage = (maxStamina > 0f) ? currentStamina / maxStamina : 1f;
-        maxStamina = Mathf.Max(1f, newMaxStamina);
+        maxStamina = baseStamina + staminaPerPoint * staminaSkillPoints;
         currentStamina = Mathf.Clamp(maxStamina * staminaPercentage, 0f, maxStamina);
         targetStamina = currentStamina;
         UpdateStaminaBar();
     }
 
+    // Back-compat for older code paths (e.g., StatsManager)
+    [System.Obsolete("Prefer SetStaminaSkillPoints() or RecalculateMaxStamina().")]
+    public void SetMaxStamina(float newMaxStamina)
+    {
+        float pct = (maxStamina > 0f) ? currentStamina / maxStamina : 1f;
+        maxStamina = Mathf.Max(1f, newMaxStamina);
+        currentStamina = Mathf.Clamp(maxStamina * pct, 0f, maxStamina);
+        targetStamina = currentStamina;
+        UpdateStaminaBar();
+    }
+
+    // Used when player spends points into Stamina
+    public void SetStaminaSkillPoints(int points)
+    {
+        staminaSkillPoints = Mathf.Max(0, points);
+        RecalculateMaxStamina();
+    }
+
     // Public getters
     public float GetCurrentStamina() => currentStamina;
     public float GetMaxStamina() => maxStamina;
-    public float GetStaminaPercentage() => currentStamina / maxStamina;
+    public float GetStaminaPercentage() => (maxStamina > 0f) ? currentStamina / maxStamina : 0f;
     public bool IsRegenerating() => isRegenerating;
 }

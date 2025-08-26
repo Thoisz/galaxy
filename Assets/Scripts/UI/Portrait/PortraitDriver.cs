@@ -17,7 +17,20 @@ public class PortraitDriver : MonoBehaviour
 
     // inputs from systems
     private float healthPct = 1f;   // 0..1
-    private float staminaPct = 1f;  // 0..1
+
+    // --- NEW: stamina inputs (absolute and pct) ---
+    private float staminaPct = 1f;       // kept for backward-compat
+    private float staminaPoints = float.PositiveInfinity; // absolute stamina points
+
+    [Header("Stamina Thresholds")]
+    [Tooltip("If true, stamina tired-face uses absolute points instead of percent.")]
+    public bool staminaUsesAbsolute = true;
+
+    [Tooltip("Player looks tired when current stamina is < this many points (24 or less if set to 25).")]
+    public float tiredBelowPoints = 25f; // tired when current < 25 (i.e., 24 or less)
+
+    [Tooltip("Fallback percent threshold if not using absolute points.")]
+    [Range(0f,1f)] public float tiredBelowPercent = 0.10f; // legacy ≤10%
 
     // internal drive
     private float currentWeight = 0f; // 0..100
@@ -55,8 +68,13 @@ public class PortraitDriver : MonoBehaviour
     {
         // Pick severity from both sources (the “worst” wins)
         int sevHealth = SeverityFromPct(healthPct);
-        int sevStam   = SeverityFromPctForStamina(staminaPct);
-        int sev       = Mathf.Max(sevHealth, sevStam);
+
+        // --- CHANGED: stamina severity now supports absolute points ---
+        int sevStam = staminaUsesAbsolute
+            ? SeverityFromPoints(staminaPoints)
+            : SeverityFromPctForStamina(staminaPct);
+
+        int sev = Mathf.Max(sevHealth, sevStam);
 
         targetWeight = sev * 50f; // 0, 50, 100
 
@@ -78,11 +96,17 @@ public class PortraitDriver : MonoBehaviour
         return 0;
     }
 
-    // For STAMINA we only care about the 20% face (per your spec)
-    // 2 = ≤20%, else 0
+    // Legacy STAMINA percent mapping (kept for compatibility)
     private int SeverityFromPctForStamina(float pct01)
     {
-        return (pct01 <= 0.10f) ? 2 : 0;
+        return (pct01 <= tiredBelowPercent) ? 2 : 0;
+    }
+
+    // --- NEW: absolute stamina points mapping ---
+    // 2 if current stamina is under 25 points (i.e., < tiredBelowPoints), else 0
+    private int SeverityFromPoints(float points)
+    {
+        return (points < tiredBelowPoints) ? 2 : 0;
     }
 
     // -------- public API called by other systems --------
@@ -91,9 +115,16 @@ public class PortraitDriver : MonoBehaviour
         healthPct = Mathf.Clamp01(pct01);
     }
 
+    // Back-compat: still here if something else calls it
     public void SetStaminaPercent(float pct01)
     {
         staminaPct = Mathf.Clamp01(pct01);
+    }
+
+    // --- NEW: absolute stamina setter ---
+    public void SetStaminaPoints(float points)
+    {
+        staminaPoints = Mathf.Max(0f, points);
     }
 
     public void PlayHurt()

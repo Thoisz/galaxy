@@ -43,6 +43,10 @@ public class PlayerMovement : MonoBehaviour
     // Singleton for easy access from other scripts
     public static PlayerMovement instance;
 
+    private bool _freeLookWasActive = false;
+    private Vector3 _frozenRunDirection = Vector3.zero;
+    private bool _holdFrozenDirection = false;
+
     void Start()
 {
     // Singleton setup
@@ -78,23 +82,80 @@ public class PlayerMovement : MonoBehaviour
 }
 
     void Update()
+{
+    // 1) Ground check
+    _wasGroundedLastFrame = _isGrounded;
+    _isGrounded = CheckGrounded();
+
+    // 2) Inputs
+    float h = Input.GetAxisRaw("Horizontal");
+    float v = Input.GetAxisRaw("Vertical");
+
+    bool bothButtons = Input.GetMouseButton(0) && Input.GetMouseButton(1);
+    if (bothButtons) { h = 0f; v = 1f; }
+
+    _hasMovementInput = (Mathf.Abs(h) > 0.1f || Mathf.Abs(v) > 0.1f);
+
+    // 3) Camera-relative direction
+    CalculateMoveDirection(h, v);
+
+    // 4) Free-look heading freeze + hold during recenter
+    bool freeLookOnly = (_playerCamera != null) && _playerCamera.IsFreeLookOnlyActive();
+
+    // When free-look begins while moving, capture heading
+    if (freeLookOnly && _hasMovementInput && !bothButtons)
     {
-        // 1) Ground check
-        _wasGroundedLastFrame = _isGrounded;
-        _isGrounded = CheckGrounded();
-
-        // 2) Get input and calculate move direction relative to camera
-        float h = Input.GetAxisRaw("Horizontal");
-        float v = Input.GetAxisRaw("Vertical");
-        
-        // Track if there's any movement input
-        _hasMovementInput = (Mathf.Abs(h) > 0.1f || Mathf.Abs(v) > 0.1f);
-        
-        CalculateMoveDirection(h, v);
-
-        // 3) Update animator if available
-        UpdateAnimator();
+        if (!_freeLookWasActive)
+        {
+            _frozenRunDirection = (_worldMoveDirection.sqrMagnitude > 0.0001f)
+                ? _worldMoveDirection
+                : _lastValidMoveDirection;
+        }
+        _worldMoveDirection = _frozenRunDirection;
+        _freeLookWasActive = true;
     }
+    else
+    {
+        // Free-look just ended this frame?
+        if (_freeLookWasActive && !freeLookOnly)
+        {
+            // Kick off camera recenter and hold heading until it finishes (or input stops/changes)
+            if (_playerCamera != null && _hasMovementInput && !bothButtons)
+                _playerCamera.StartRecenteringBehindPlayer();
+
+            _holdFrozenDirection = true;
+        }
+        _freeLookWasActive = false;
+
+        // Maintain frozen heading while recentering (or until conditions break)
+        if (_holdFrozenDirection)
+        {
+            bool stillHolding = _hasMovementInput
+                                && !bothButtons
+                                && !(_playerCamera != null && _playerCamera.IsPanningActive());
+
+            if (stillHolding && _frozenRunDirection.sqrMagnitude > 0.0001f)
+            {
+                _worldMoveDirection = _frozenRunDirection;
+
+                // Stop holding once recenter ends
+                if (_playerCamera != null && !_playerCamera.IsRecenteringActive())
+                    _holdFrozenDirection = false;
+            }
+            else
+            {
+                _holdFrozenDirection = false;
+            }
+        }
+        else
+        {
+            _frozenRunDirection = Vector3.zero;
+        }
+    }
+
+    // 5) Animator
+    UpdateAnimator();
+}
 
     void FixedUpdate()
     {

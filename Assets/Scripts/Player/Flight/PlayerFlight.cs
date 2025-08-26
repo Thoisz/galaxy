@@ -164,6 +164,11 @@ public class PlayerFlight : MonoBehaviour
     private bool _wasInSpaceLastFrame = false;
     private Vector3 _driftVelocity = Vector3.zero;
     private bool _isDrifting = false;
+
+    private bool _freeLookWasActive_Flight = false;
+    private Vector3 _frozenFlightDirection = Vector3.zero;
+    private bool _holdFrozenDirection_Flight = false;
+
     
     void Start()
 {
@@ -233,168 +238,140 @@ public class PlayerFlight : MonoBehaviour
     }
 
     // Modify the Update method to ensure FOV transitions continue after flight is disabled
-    void Update()
-    {
-        // Always update FOV effect, regardless of flight state
-        UpdateFOVEffect();
+void Update()
+{
+    // Always update FOV effect
+    UpdateFOVEffect();
 
-        // Check for camera panning state from PlayerCamera
-        if (_playerCamera != null)
+    // Camera panning state
+    if (_playerCamera != null) _isCameraPanning = _playerCamera.IsPanningActive();
+    else _isCameraPanning = Input.GetMouseButton(1);
+
+    // Activation when not flying
+    if (!_isFlying)
+    {
+        if (Input.GetKeyDown(_flightActivationKey))
         {
-            _isCameraPanning = _playerCamera.IsPanningActive();
+            _isHoldingSpace = true;
+            _spaceHoldStartTime = Time.time;
+        }
+        if (_isHoldingSpace && Input.GetKey(_flightActivationKey))
+        {
+            float holdTime = Time.time - _spaceHoldStartTime;
+            if (holdTime >= _flightActivationTime) ActivateFlight();
+        }
+        if (_isHoldingSpace && Input.GetKeyUp(_flightActivationKey))
+        {
+            _isHoldingSpace = false;
+        }
+        return;
+    }
+
+    // === Flying ===
+    if (Input.GetKeyUp(_superSpeedKey)) _preventSuperSpeedDoubleTap = false;
+
+    // Deactivate by double-tap Q
+    if (Input.GetKeyDown(_flightDeactivationKey))
+    {
+        float dt = Time.time - _lastQTapTime;
+        if (_qTapPending && dt <= _doubleTapTime) { DeactivateFlight(); _qTapPending = false; }
+        else { _lastQTapTime = Time.time; _qTapPending = true; }
+    }
+
+    // Super speed double-tap
+    if (Input.GetKeyDown(_superSpeedKey) && _isFlying && !_preventSuperSpeedDoubleTap)
+    {
+        float dt = Time.time - _lastSuperSpeedTapTime;
+        if (_superSpeedTapPending && dt <= _superSpeedDoubleTapTime)
+        {
+            ToggleSuperSpeed();
+            _superSpeedTapPending = false;
+            _preventSuperSpeedDoubleTap = true;
         }
         else
         {
-            // Fallback in case PlayerCamera reference is missing
-            _isCameraPanning = Input.GetMouseButton(1);
-        }
-        
-        // Flight activation logic (hold space)
-        if (!_isFlying)
-        {
-            // Check if player is starting to hold Space
-            if (Input.GetKeyDown(_flightActivationKey))
-            {
-                _isHoldingSpace = true;
-                _spaceHoldStartTime = Time.time;
-            }
-            
-            // Check if player is still holding Space
-            if (_isHoldingSpace && Input.GetKey(_flightActivationKey))
-            {
-                float holdTime = Time.time - _spaceHoldStartTime;
-                
-                // If held long enough, activate flight
-                if (holdTime >= _flightActivationTime)
-                {
-                    ActivateFlight();
-                }
-            }
-            
-            // Reset if player releases Space before activation time
-            if (_isHoldingSpace && Input.GetKeyUp(_flightActivationKey))
-            {
-                _isHoldingSpace = false;
-            }
-        }
-        else // When flying
-        {
-            // Reset the prevention flag when the super speed key is released
-            if (Input.GetKeyUp(_superSpeedKey))
-            {
-                _preventSuperSpeedDoubleTap = false;
-            }
-            
-            // Flight deactivation by double-tapping Q
-            if (Input.GetKeyDown(_flightDeactivationKey))
-            {
-                float timeSinceLastQTap = Time.time - _lastQTapTime;
-                
-                // If this is a second tap within the double tap window
-                if (_qTapPending && timeSinceLastQTap <= _doubleTapTime)
-                {
-                    DeactivateFlight();
-                    _qTapPending = false;
-                }
-                else
-                {
-                    // First tap - start tracking for double tap
-                    _lastQTapTime = Time.time;
-                    _qTapPending = true;
-                }
-            }
-            
-            // Super speed activation by double-tapping the super speed key
-            if (Input.GetKeyDown(_superSpeedKey) && _isFlying && !_preventSuperSpeedDoubleTap)
-            {
-                float timeSinceLastSuperSpeedTap = Time.time - _lastSuperSpeedTapTime;
-                
-                if (_showDebugLogs)
-                {
-                    Debug.Log($"Super speed key pressed. Time since last tap: {timeSinceLastSuperSpeedTap}");
-                }
-                
-                // Check if this is a second tap within the double tap window
-                if (_superSpeedTapPending && timeSinceLastSuperSpeedTap <= _superSpeedDoubleTapTime)
-                {
-                    if (_showDebugLogs)
-                    {
-                        Debug.Log("Double-tap detected! Toggling super speed.");
-                    }
-                    
-                    ToggleSuperSpeed();
-                    _superSpeedTapPending = false;
-                    _preventSuperSpeedDoubleTap = true;  // Prevent immediate re-triggering
-                }
-                else
-                {
-                    // First tap - start tracking for double tap
-                    if (_showDebugLogs)
-                    {
-                        Debug.Log("First tap detected, waiting for second tap...");
-                    }
-                    
-                    _lastSuperSpeedTapTime = Time.time;
-                    _superSpeedTapPending = true;
-                }
-            }
-
-            // Reset pending tap if too much time has passed
-            if (_superSpeedTapPending && (Time.time - _lastSuperSpeedTapTime) > _superSpeedDoubleTapTime)
-            {
-                _superSpeedTapPending = false;
-                
-                if (_showDebugLogs)
-                {
-                    Debug.Log("Double-tap window expired.");
-                }
-            }
-            
-            // Get input and calculate move direction
-            float h = Input.GetAxis("Horizontal");  // Using GetAxis instead of GetAxisRaw for controller support
-            float v = Input.GetAxis("Vertical");    // Using GetAxis to get analog values
-            
-            // Calculate raw input magnitude for speed control
-            _rawInputMagnitude = new Vector2(h, v).magnitude;
-            
-            // Smooth input magnitude for natural transitions
-            _smoothedInputMagnitude = Mathf.Lerp(_smoothedInputMagnitude, _rawInputMagnitude, INPUT_SMOOTHING);
-            
-            // Check if super speed should be automatically disabled due to low input
-            if (_isSuperSpeedActive && _smoothedInputMagnitude < _minInputForSuperSpeed)
-            {
-                if (_showDebugLogs)
-                {
-                    Debug.Log("Input too low, disabling super speed");
-                }
-                
-                DeactivateSuperSpeed();
-            }
-            
-            // Update target speed based on input magnitude and super speed state
-            UpdateFlightSpeed();
-            
-            // Process vertical movement with delay
-            HandleVerticalMovementWithDelay();
-            
-            // Track if there's any movement input
-            _hasMovementInput = (_rawInputMagnitude > 0.1f || Mathf.Abs(_verticalInput) > 0.1f);
-            
-            CalculateMoveDirection(h, v);
-            
-            // Update idle ascending/descending states
-            UpdateIdleVerticalStates();
-            
-            // Update animator if available
-            UpdateAnimator();
-            
-            // Check for landing (direct ground check)
-            if (CheckForGrounding())
-            {
-                DeactivateFlight();
-            }
+            _lastSuperSpeedTapTime = Time.time;
+            _superSpeedTapPending = true;
         }
     }
+    if (_superSpeedTapPending && (Time.time - _lastSuperSpeedTapTime) > _superSpeedDoubleTapTime)
+        _superSpeedTapPending = false;
+
+    // Input
+    float h = Input.GetAxis("Horizontal");
+    float v = Input.GetAxis("Vertical");
+
+    bool bothButtons = Input.GetMouseButton(0) && Input.GetMouseButton(1);
+    if (bothButtons) { h = 0f; v = 1f; }
+
+    // Magnitudes for speed selection
+    _rawInputMagnitude = new Vector2(h, v).magnitude;
+    _smoothedInputMagnitude = Mathf.Lerp(_smoothedInputMagnitude, _rawInputMagnitude, INPUT_SMOOTHING);
+
+    if (_isSuperSpeedActive && _smoothedInputMagnitude < _minInputForSuperSpeed) DeactivateSuperSpeed();
+
+    UpdateFlightSpeed();
+    HandleVerticalMovementWithDelay();
+
+    _hasMovementInput = (_rawInputMagnitude > 0.1f || Mathf.Abs(_verticalInput) > 0.1f || bothButtons);
+
+    // Camera-relative move
+    CalculateMoveDirection(h, v);
+
+    // === LMB free-look heading freeze and post-release hold ===
+    bool freeLookOnly = (_playerCamera != null) && _playerCamera.IsFreeLookOnlyActive();
+
+    if (freeLookOnly && _hasMovementInput && !bothButtons)
+    {
+        if (!_freeLookWasActive_Flight)
+        {
+            _frozenFlightDirection = (_worldMoveDirection.sqrMagnitude > 0.0001f)
+                ? _worldMoveDirection
+                : _lastYawDirection;
+        }
+        _worldMoveDirection = _frozenFlightDirection;
+        _freeLookWasActive_Flight = true;
+    }
+    else
+    {
+        if (_freeLookWasActive_Flight && !freeLookOnly)
+        {
+            if (_playerCamera != null && _hasMovementInput && !bothButtons)
+                _playerCamera.StartRecenteringBehindPlayer();
+
+            _holdFrozenDirection_Flight = true;
+        }
+        _freeLookWasActive_Flight = false;
+
+        if (_holdFrozenDirection_Flight)
+        {
+            bool stillHolding = _hasMovementInput
+                                && !bothButtons
+                                && !(_playerCamera != null && _playerCamera.IsPanningActive());
+
+            if (stillHolding && _frozenFlightDirection.sqrMagnitude > 0.0001f)
+            {
+                _worldMoveDirection = _frozenFlightDirection;
+
+                if (_playerCamera != null && !_playerCamera.IsRecenteringActive())
+                    _holdFrozenDirection_Flight = false;
+            }
+            else
+            {
+                _holdFrozenDirection_Flight = false;
+            }
+        }
+        else
+        {
+            _frozenFlightDirection = Vector3.zero;
+        }
+    }
+
+    // Idle vertical flags, animator, landing
+    UpdateIdleVerticalStates();
+    UpdateAnimator();
+    if (CheckForGrounding()) DeactivateFlight();
+}
 
     void FixedUpdate()
 {

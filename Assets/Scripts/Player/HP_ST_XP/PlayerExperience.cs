@@ -20,12 +20,27 @@ public class PlayerExperience : MonoBehaviour
     [Tooltip("XP required to go from this level to the next.")]
     public float xpToNextLevel = 100f;
 
-    [Header("Progression Tuning")]
-    [Tooltip("XP needed at level 0.")]
+    [Header("Progression Tuning (Polynomial)")]
+    [Tooltip("XP needed at level 0 (base requirement).")]
     public float baseXPAtLevel0 = 100f;
 
-    [Tooltip("Multiplier per level. 1.0 = always baseXP; 1.2 = +20% each level.")]
-    public float levelXPGrowth = 1.20f;
+    [Tooltip("Maximum level cap. XP stops advancing past this level.")]
+    public int levelCap = 200;
+
+    [Space(6)]
+    [Tooltip("Linear coefficient for XP requirement (multiplies level).")]
+    public float linearPerLevel = 150f;
+
+    [Tooltip("Quadratic coefficient for XP requirement (multiplies level^2).")]
+    public float quadraticPerLevel = 8f;
+
+    [Tooltip("Cubic coefficient for XP requirement (multiplies level^3). Set 0 for pure quadratic.")]
+    public float cubicPerLevel = 0f;
+
+    [Header("Skill Points")]
+    [Tooltip("How many skill points the player earns per level-up.")]
+    public int skillPointsPerLevel = 3;
+    public UnityEvent<int> OnSkillPointsEarned; // argument = points earned
 
     [Header("UI (Radial Fill)")]
     [Tooltip("Assign your radial Image (Fill Method = Radial).")]
@@ -64,7 +79,6 @@ public class PlayerExperience : MonoBehaviour
     private Coroutine _animRoutine;
 
     // --- internals for crossfade ---
-    // _fadeT = 0 → show levelText, hide detail; 1 → hide levelText, show detail
     private float _fadeT = 0f;
     private Color _levelBaseColor = Color.white;
     private Color _detailBaseColor = Color.white;
@@ -85,10 +99,9 @@ public class PlayerExperience : MonoBehaviour
 
     void Update()
     {
-        // Hover detection on the EXACT label area ("XP Border Label")
         bool hovering = IsPointerOver(xpHoverTarget);
 
-        float target = hovering ? 1f : 0f; // 1 = show detail, 0 = show level
+        float target = hovering ? 1f : 0f;
         _fadeT = Mathf.MoveTowards(_fadeT, target, crossfadeSpeed * Time.unscaledDeltaTime);
         ApplyCrossfade(_fadeT, force: false);
     }
@@ -99,6 +112,7 @@ public class PlayerExperience : MonoBehaviour
     public void AddXP(float amount)
     {
         if (amount <= 0f) return;
+        if (level >= levelCap) return; // no more XP gain past cap
 
         if (animateXP)
         {
@@ -108,7 +122,6 @@ public class PlayerExperience : MonoBehaviour
         }
         else
         {
-            // Instant application (no animation)
             ApplyXPInstant(amount);
             UpdateUI();
             RaiseXPChanged();
@@ -121,13 +134,11 @@ public class PlayerExperience : MonoBehaviour
     public void SetXP(float newXpInLevel)
     {
         xpInLevel = Mathf.Max(0f, newXpInLevel);
-        // Handle overflow
-        while (xpInLevel >= xpToNextLevel)
+
+        while (xpInLevel >= xpToNextLevel && level < levelCap)
         {
             xpInLevel -= xpToNextLevel;
-            level++;
-            xpToNextLevel = CalculateXPToNextLevel(level);
-            OnLevelUp?.Invoke(level);
+            LevelUp();
         }
         UpdateUI();
         RaiseXPChanged();
@@ -137,18 +148,14 @@ public class PlayerExperience : MonoBehaviour
     {
         while (_pendingXP > 0f)
         {
-            // If this level is already complete (edge case), level up first
-            if (xpInLevel >= xpToNextLevel)
+            if (xpInLevel >= xpToNextLevel && level < levelCap)
             {
                 xpInLevel -= xpToNextLevel;
-                level++;
-                xpToNextLevel = CalculateXPToNextLevel(level);
-                OnLevelUp?.Invoke(level);
+                LevelUp();
                 UpdateUI();
                 RaiseXPChanged();
             }
 
-            // Determine how much XP to pour this frame based on bar speed
             float xpPerSecond = Mathf.Max(0.0001f, fillSpeedBarsPerSec) * xpToNextLevel;
             float stepXP = xpPerSecond * Time.deltaTime;
 
@@ -171,28 +178,46 @@ public class PlayerExperience : MonoBehaviour
     {
         xpInLevel += amount;
 
-        while (xpInLevel >= xpToNextLevel)
+        while (xpInLevel >= xpToNextLevel && level < levelCap)
         {
             xpInLevel -= xpToNextLevel;
-            level++;
-            xpToNextLevel = CalculateXPToNextLevel(level);
-            OnLevelUp?.Invoke(level);
+            LevelUp();
         }
     }
 
+    private void LevelUp()
+    {
+        level++;
+        xpToNextLevel = CalculateXPToNextLevel(level);
+        OnLevelUp?.Invoke(level);
+
+        if (skillPointsPerLevel > 0)
+            OnSkillPointsEarned?.Invoke(skillPointsPerLevel);
+    }
+
     /// <summary>
-    /// base * growth^level. Set growth=1.0 to keep the same XP each level.
+    /// Polynomial XP requirement (no exponential blow-up).
+    /// XP(lvl) = base + A*lvl + B*lvl^2 + C*lvl^3
+    /// Tune A/B/C in inspector. Set C=0 for quadratic.
     /// </summary>
     private float CalculateXPToNextLevel(int lvl)
     {
-        return Mathf.Max(1f, baseXPAtLevel0 * Mathf.Pow(levelXPGrowth, Mathf.Max(0, lvl)));
+        if (lvl >= levelCap) return Mathf.Infinity;
+
+        float L = Mathf.Max(0, lvl);
+        float xp = baseXPAtLevel0
+                   + (linearPerLevel    * L)
+                   + (quadraticPerLevel * L * L)
+                   + (cubicPerLevel     * L * L * L);
+
+        return Mathf.Max(1f, xp);
     }
 
     private void UpdateUI()
     {
         if (xpFillImage != null)
         {
-            float fill = (xpToNextLevel <= 0f) ? 0f : Mathf.Clamp01(xpInLevel / xpToNextLevel);
+            float fill = (xpToNextLevel <= 0f || float.IsInfinity(xpToNextLevel)) ? 0f : Mathf.Clamp01(xpInLevel / xpToNextLevel);
             xpFillImage.fillAmount = fill;
         }
 
@@ -200,7 +225,12 @@ public class PlayerExperience : MonoBehaviour
             levelText.text = $"Lv. {level}";
 
         if (xpDetailText != null)
-            xpDetailText.text = $"{Mathf.FloorToInt(xpInLevel)} / {Mathf.FloorToInt(xpToNextLevel)}";
+        {
+            if (float.IsInfinity(xpToNextLevel))
+                xpDetailText.text = $"{Mathf.FloorToInt(xpInLevel)} / —";
+            else
+                xpDetailText.text = $"{Mathf.FloorToInt(xpInLevel)} / {Mathf.FloorToInt(xpToNextLevel)}";
+        }
     }
 
     private void RaiseXPChanged()
@@ -208,7 +238,6 @@ public class PlayerExperience : MonoBehaviour
         OnXPChanged?.Invoke(level, xpInLevel, xpToNextLevel);
     }
 
-    // ---------- hover/crossfade helpers ----------
     private bool IsPointerOver(RectTransform target)
     {
         if (target == null) return false;
@@ -220,7 +249,6 @@ public class PlayerExperience : MonoBehaviour
     {
         t = Mathf.Clamp01(t);
 
-        // Detail text alpha = t
         if (xpDetailText != null)
         {
             var c = _detailBaseColor;
@@ -228,7 +256,6 @@ public class PlayerExperience : MonoBehaviour
             xpDetailText.color = c;
         }
 
-        // Level text alpha = 1 - t
         if (levelText != null)
         {
             var c = _levelBaseColor;
@@ -238,7 +265,7 @@ public class PlayerExperience : MonoBehaviour
     }
 
     // Convenience getters
-    public float GetFill01() => (xpToNextLevel <= 0f) ? 0f : Mathf.Clamp01(xpInLevel / xpToNextLevel);
+    public float GetFill01() => (xpToNextLevel <= 0f || float.IsInfinity(xpToNextLevel)) ? 0f : Mathf.Clamp01(xpInLevel / xpToNextLevel);
     public float GetXPNeededThisLevel() => xpToNextLevel;
     public float GetXPInLevel() => xpInLevel;
     public int   GetLevel() => level;

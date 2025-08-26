@@ -1,11 +1,20 @@
-// Assets/Scripts/Player/HP_ST/PlayerHealth.cs
 using UnityEngine;
 using UnityEngine.UI;
 
 public class PlayerHealth : MonoBehaviour
 {
     [Header("Health Settings")]
-    public float maxHealth = 100f;
+    [Tooltip("Base health at 0 skill points.")]
+    public float baseHealth = 200f;
+
+    [Tooltip("How much health each skill point adds.")]
+    public float healthPerPoint = 24f; // 200 + (200 * 24) = 5000
+
+    [Tooltip("How many skill points are currently invested into HP.")]
+    public int healthSkillPoints = 0;
+
+    [Tooltip("Current maximum health after scaling.")]
+    public float maxHealth = 200f;
     public float currentHealth;
 
     [Header("Health Regeneration")]
@@ -43,6 +52,8 @@ public class PlayerHealth : MonoBehaviour
 
     void Start()
     {
+        RecalculateMaxHealth(); // apply scaling at start
+
         currentHealth = maxHealth;
         displayedHealth = maxHealth;
         targetHealth = maxHealth;
@@ -58,7 +69,6 @@ public class PlayerHealth : MonoBehaviour
 
         UpdateHealthBar();
 
-        // report to portrait once at start
         if (portrait != null)
             portrait.SetHealthPercent(currentHealth / Mathf.Max(1f, maxHealth));
     }
@@ -125,7 +135,6 @@ public class PlayerHealth : MonoBehaviour
 
         TriggerDamageFlash();
 
-        // (Hurt plays only for tick/lava via TakeTickDamage)
         if (currentHealth <= 0) Die();
 
         Debug.Log($"Player took {damage} damage. Health: {currentHealth}/{maxHealth}");
@@ -133,10 +142,8 @@ public class PlayerHealth : MonoBehaviour
 
     public void TakeTickDamage(float damage)
     {
-        // Apply normal damage logic
         TakeDamage(damage);
 
-        // Portrait reacts only to tick/lava damage
         if (portrait != null && damage > 0f)
             portrait.PlayHurt();
     }
@@ -204,13 +211,35 @@ public class PlayerHealth : MonoBehaviour
             healthBarText.text = $"{Mathf.RoundToInt(displayedHealth)}/{Mathf.RoundToInt(maxHealth)}";
     }
 
-    public void SetMaxHealth(float newMaxHealth)
+    /// <summary>
+    /// Recalculates max health based on invested skill points.
+    /// </summary>
+    public void RecalculateMaxHealth()
     {
-        float healthPercentage = currentHealth / maxHealth;
-        maxHealth = newMaxHealth;
-        currentHealth = maxHealth * healthPercentage;
+        float oldPercentage = (maxHealth > 0f) ? currentHealth / maxHealth : 1f;
+        maxHealth = baseHealth + healthPerPoint * healthSkillPoints;
+        currentHealth = maxHealth * oldPercentage;
         actualRegenRate = maxHealth / healthRegenTime;
         UpdateHealthBar();
+    }
+
+    // Back-compat for older code paths (e.g., StatsManager)
+[System.Obsolete("Prefer SetHealthSkillPoints() or RecalculateMaxHealth().")]
+public void SetMaxHealth(float newMaxHealth)
+{
+    float pct = (maxHealth > 0f) ? currentHealth / maxHealth : 1f;
+    maxHealth = Mathf.Max(1f, newMaxHealth);
+    currentHealth = Mathf.Clamp(maxHealth * pct, 0f, maxHealth);
+    targetHealth = currentHealth;
+    actualRegenRate = maxHealth / healthRegenTime;
+    UpdateHealthBar();
+}
+
+    // Used when player spends points into HP
+    public void SetHealthSkillPoints(int points)
+    {
+        healthSkillPoints = Mathf.Max(0, points);
+        RecalculateMaxHealth();
     }
 
     // getters
