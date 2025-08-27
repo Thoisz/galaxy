@@ -468,40 +468,41 @@ public class PlayerCamera : MonoBehaviour
     wasPreviouslyPanningInSpace = (isPanning || isLeftPanning) && isInSpace;
 }
 
-    private void EndThirdPersonPanning()
+    // REPLACE this method
+private void EndThirdPersonPanning()
+{
+    bool wasInSpace = gravityBody != null && gravityBody.IsInSpace;
+    Vector3 finalCameraForward = cameraTransform.forward;
+    Vector3 finalCameraUp      = cameraTransform.up;
+
+    isPanning = false;
+
+    // If LMB is still held, KEEP the cursor locked & hand off to LMB pan
+    if (UnityEngine.InputSystem.Mouse.current != null &&
+        UnityEngine.InputSystem.Mouse.current.leftButton.isPressed)
     {
-        bool wasInSpace = gravityBody != null && gravityBody.IsInSpace;
-        Vector3 finalCameraForward = cameraTransform.forward;
-        Vector3 finalCameraUp = cameraTransform.up;
-
-        isPanning = false;
-        LockCursor(false);
-
-        if (wasInSpace)
+        if (!isLeftPanning)
         {
-            // ✅ DO NOT reset gravity based on current camera up (it could be world-up)
-            Debug.Log("[Camera] Pan ended in space. Preserving orientation.");
-
-            // Optional: Log effective direction for sanity check
-            Debug.Log("[Camera] Effective gravity direction (space): " + gravityBody.GetEffectiveGravityDirection());
-
-            // Optionally update camera to maintain visual stability
-            finalRotation = Quaternion.LookRotation(finalCameraForward, finalCameraUp);
-            cameraTransform.rotation = finalRotation;
-
-            // 🛑 DO NOT: gravityBody.SetSpaceGravityDirection(-finalCameraUp);
-
-            // Notify flight controller if needed
-            if (playerFlight != null && playerFlight.IsFlying())
-            {
-                playerFlight.SendMessage("OnCameraPanning", finalCameraForward, SendMessageOptions.DontRequireReceiver);
-            }
+            isLeftPanning = true;
+            // keep initialCursorPosition so we warp back only when *all* panning ends
         }
-        else if (Mouse.current != null)
-        {
-            Mouse.current.WarpCursorPosition(initialCursorPosition);
-        }
+        return; // don't unlock, don't warp
     }
+
+    // Fully end panning
+    LockCursor(false);
+
+    if (wasInSpace)
+    {
+        // keep orientation stable in space
+        finalRotation = Quaternion.LookRotation(finalCameraForward, finalCameraUp);
+        cameraTransform.rotation = finalRotation;
+    }
+    else if (UnityEngine.InputSystem.Mouse.current != null)
+    {
+        UnityEngine.InputSystem.Mouse.current.WarpCursorPosition(initialCursorPosition);
+    }
+}
 
     private void UpdateCameraPosition()
     {
@@ -983,6 +984,7 @@ public bool IsLeftPanningActive()
         && !(UnityEngine.InputSystem.Mouse.current != null && UnityEngine.InputSystem.Mouse.current.rightButton.isPressed);
 }
 
+// REPLACE this method
 private void EndLeftPanning()
 {
     bool wasInSpace = gravityBody != null && gravityBody.IsInSpace;
@@ -990,17 +992,24 @@ private void EndLeftPanning()
     Vector3 finalCameraUp      = cameraTransform.up;
 
     isLeftPanning = false;
+
+    // If RMB is still held, KEEP the cursor locked; RMB pan will continue
+    if (UnityEngine.InputSystem.Mouse.current != null &&
+        UnityEngine.InputSystem.Mouse.current.rightButton.isPressed)
+    {
+        return; // don't unlock, don't warp
+    }
+
+    // Fully end panning
     LockCursor(false);
 
     if (wasInSpace)
     {
-        // Keep current orientation stable in space
         finalRotation = Quaternion.LookRotation(finalCameraForward, finalCameraUp);
         cameraTransform.rotation = finalRotation;
     }
     else if (UnityEngine.InputSystem.Mouse.current != null)
     {
-        // Return cursor to where it started
         UnityEngine.InputSystem.Mouse.current.WarpCursorPosition(initialCursorPosition);
     }
 }
