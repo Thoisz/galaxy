@@ -798,105 +798,102 @@ void Update()
         }
     }
 
-    private void ApplyFlightMovement()
+private void ApplyFlightMovement()
+{
+    Vector3 currentVelocity = _rigidbody.velocity;
+    Vector3 targetVelocity = Vector3.zero;
+
+    float speedFactor = 1.0f;
+    if (_isInGravityTransition)
     {
-        Vector3 currentVelocity = _rigidbody.velocity;
-        Vector3 targetVelocity = Vector3.zero;
+        speedFactor = _gravityTransitionSpeedFactor;
+    }
+    else if (_isRecoveringFromTransition)
+    {
+        float recoveryProgress = _transitionRecoveryTimer / _transitionRecoveryDuration;
+        speedFactor = Mathf.Lerp(_gravityTransitionSpeedFactor, 1.0f, recoveryProgress);
+    }
 
-        float speedFactor = 1.0f;
-        if (_isInGravityTransition)
+    if (_worldMoveDirection.magnitude > 0.1f)
+    {
+        targetVelocity = _worldMoveDirection * _currentTargetSpeed * speedFactor;
+    }
+
+    if (Mathf.Abs(_verticalInput) > 0.1f && IsPitchWithinAllowedRange())
+    {
+        float verticalSpeed = _verticalInput > 0 ? _ascentSpeed : _descentSpeed;
+        verticalSpeed *= speedFactor;
+
+        if (_isInSpace && _isFlying && _isCameraPanning)
         {
-            speedFactor = _gravityTransitionSpeedFactor;
-        }
-        else if (_isRecoveringFromTransition)
-        {
-            float recoveryProgress = _transitionRecoveryTimer / _transitionRecoveryDuration;
-            speedFactor = Mathf.Lerp(_gravityTransitionSpeedFactor, 1.0f, recoveryProgress);
-        }
-
-        if (_worldMoveDirection.magnitude > 0.1f)
-        {
-            targetVelocity = _worldMoveDirection * _currentTargetSpeed * speedFactor;
-        }
-
-        if (Mathf.Abs(_verticalInput) > 0.1f && IsPitchWithinAllowedRange())
-        {
-            float verticalSpeed = _verticalInput > 0 ? _ascentSpeed : _descentSpeed;
-            verticalSpeed *= speedFactor;
-
-            if (_isInSpace && _isFlying && _isCameraPanning)
-            {
-                targetVelocity += _playerCamera.GetCameraUp() * _verticalInput * verticalSpeed;
-            }
-            else
-            {
-                Vector3 effectiveUp = _isInSpace ? _spaceUpVector : (_gravityBody != null ? -_gravityBody.GravityDirection.normalized : Vector3.up);
-                targetVelocity += effectiveUp * _verticalInput * verticalSpeed;
-            }
-        }
-
-        if (_hasMovementInput)
-        {
-            if (!_wasMovingLastFrame)
-            {
-                _hoverStartPosition = transform.position;
-            }
-
-            float lerpFactor = _isSuperSpeedActive ? Time.fixedDeltaTime * 20f : Time.fixedDeltaTime * 10f;
-
-            if (_isInGravityTransition || _isRecoveringFromTransition)
-            {
-                lerpFactor *= 1.5f;
-            }
-
-            float velocityDifference = (targetVelocity - currentVelocity).sqrMagnitude;
-            if (velocityDifference < 0.05f)
-            {
-                _rigidbody.velocity = targetVelocity;
-            }
-            else
-            {
-                _rigidbody.velocity = Vector3.Lerp(currentVelocity, targetVelocity, lerpFactor);
-            }
-
-            _wasMovingLastFrame = true;
-            _driftVelocity = _rigidbody.velocity;
+            targetVelocity += _playerCamera.GetCameraUp() * _verticalInput * verticalSpeed;
         }
         else
         {
-            if (_wasMovingLastFrame)
-            {
-                _hoverStartPosition = transform.position;
-                _hoverTime = 0f;
+            Vector3 effectiveUp = _isInSpace ? _spaceUpVector
+                : (_gravityBody != null ? -_gravityBody.GravityDirection.normalized : Vector3.up);
+            targetVelocity += effectiveUp * _verticalInput * verticalSpeed;
+        }
+    }
 
-                if (_isSuperSpeedActive)
-                {
-                    if (_showDebugLogs)
-                    {
-                        Debug.Log("Movement stopped - disabling super speed");
-                    }
-                    DeactivateSuperSpeed();
-                }
-
-                _driftVelocity = Vector3.zero;
-            }
-
-            _rigidbody.velocity = Vector3.zero;
-
-            if (!_isInGravityTransition)
-            {
-                _hoverTime += Time.fixedDeltaTime;
-                float hoverOffset = Mathf.Sin(_hoverTime * _hoverFrequency * Mathf.PI * 2) * _hoverAmplitude;
-                Vector3 upDirection = _isInSpace ? _spaceUpVector : ((_gravityBody != null) ? -_gravityBody.GravityDirection.normalized : transform.up);
-                Vector3 hoverPosition = _hoverStartPosition + upDirection * hoverOffset;
-                transform.position = hoverPosition;
-            }
-
-            _wasMovingLastFrame = false;
+    if (_hasMovementInput)
+    {
+        if (!_wasMovingLastFrame)
+        {
+            _hoverStartPosition = _rigidbody.position;
         }
 
-        RotateTowardsFlyingDirection();
+        float lerpFactor = _isSuperSpeedActive ? Time.fixedDeltaTime * 20f : Time.fixedDeltaTime * 10f;
+        if (_isInGravityTransition || _isRecoveringFromTransition) lerpFactor *= 1.5f;
+
+        float velocityDifference = (targetVelocity - currentVelocity).sqrMagnitude;
+        if (velocityDifference < 0.05f)
+        {
+            _rigidbody.velocity = targetVelocity;
+        }
+        else
+        {
+            _rigidbody.velocity = Vector3.Lerp(currentVelocity, targetVelocity, lerpFactor);
+        }
+
+        _wasMovingLastFrame = true;
+        _driftVelocity = _rigidbody.velocity;
     }
+    else
+    {
+        // Enter/maintain hover
+        if (_wasMovingLastFrame)
+        {
+            _hoverStartPosition = _rigidbody.position;
+            _hoverTime = 0f;
+
+            if (_isSuperSpeedActive) DeactivateSuperSpeed();
+            _driftVelocity = Vector3.zero;
+        }
+
+        // Kill any residual motion while hovering
+        _rigidbody.velocity = Vector3.zero;
+        _rigidbody.angularVelocity = Vector3.zero;
+
+        if (!_isInGravityTransition)
+        {
+            _hoverTime += Time.fixedDeltaTime;
+            float hoverOffset = Mathf.Sin(_hoverTime * _hoverFrequency * Mathf.PI * 2f) * _hoverAmplitude;
+
+            Vector3 upDirection = _isInSpace
+                ? _spaceUpVector
+                : (_gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up);
+
+            // Physics-friendly bobbing
+            Vector3 hoverPosition = _hoverStartPosition + upDirection * hoverOffset;
+            _rigidbody.MovePosition(hoverPosition);
+        }
+
+        _wasMovingLastFrame = false;
+    }
+
+    RotateTowardsFlyingDirection();
+}
 
     private void RotateTowardsFlyingDirection()
     {
@@ -1150,44 +1147,47 @@ void Update()
     }
 
     private void UpdateFlightGravityInteraction()
+{
+    if (_gravityBody != null)
     {
-        if (_gravityBody != null)
+        if (_isInGravityTransition)
         {
-            if (_isInGravityTransition)
+            if (!_gravityBody.enabled)
             {
-                if (!_gravityBody.enabled)
-                {
-                    _gravityBody.enabled = true;
-                    if (_enableTransitionDebugLogs)
-                        Debug.Log("Flight: Re-enabled GravityBody for transition detection");
-                }
-            }
-            else if (_isRecoveringFromTransition)
-            {
-                // Keep it enabled during recovery
-                if (!_gravityBody.enabled)
-                {
-                    _gravityBody.enabled = true;
-                    if (_enableTransitionDebugLogs)
-                        Debug.Log("Flight: GravityBody enabled during recovery");
-                }
-            }
-            else
-            {
-                // No longer transitioning or recovering — disable GravityBody
-                if (_gravityBody.enabled)
-                {
-                    _gravityBody.enabled = false;
-                    if (_enableTransitionDebugLogs)
-                        Debug.Log("Flight: GravityBody disabled after recovery");
-                }
+                _gravityBody.enabled = true;
+                if (_enableTransitionDebugLogs) Debug.Log("Flight: Re-enabled GravityBody for transition detection");
             }
         }
-
-        // Apply anti-gravity force to counteract environment gravity
-        Vector3 gravityDirection = _gravityBody != null && _gravityBody.enabled ? _gravityBody.GravityDirection.normalized : Physics.gravity.normalized;
-        _rigidbody.AddForce(-gravityDirection * Physics.gravity.magnitude, ForceMode.Acceleration);
+        else if (_isRecoveringFromTransition)
+        {
+            if (!_gravityBody.enabled)
+            {
+                _gravityBody.enabled = true;
+                if (_enableTransitionDebugLogs) Debug.Log("Flight: GravityBody enabled during recovery");
+            }
+        }
+        else
+        {
+            if (_gravityBody.enabled)
+            {
+                _gravityBody.enabled = false;
+                if (_enableTransitionDebugLogs) Debug.Log("Flight: GravityBody disabled after recovery");
+            }
+        }
     }
+
+    // While idle-hovering (no input, no transition), don't push with anti-gravity.
+    if (!_hasMovementInput && !_isInGravityTransition && !_isRecoveringFromTransition)
+        return;
+
+    // Apply anti-gravity only when moving or during/after transitions
+    Vector3 gravityDirection =
+        (_gravityBody != null && _gravityBody.enabled)
+            ? _gravityBody.GravityDirection.normalized
+            : Physics.gravity.normalized;
+
+    _rigidbody.AddForce(-gravityDirection * Physics.gravity.magnitude, ForceMode.Acceleration);
+}
 
     private void OnSpaceTransitionEvent(bool enteringSpace, Vector3 gravityDirection)
     {
