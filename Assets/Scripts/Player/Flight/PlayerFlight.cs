@@ -798,6 +798,7 @@ void Update()
         }
     }
 
+// REPLACE the whole method
 private void ApplyFlightMovement()
 {
     Vector3 currentVelocity = _rigidbody.velocity;
@@ -805,88 +806,79 @@ private void ApplyFlightMovement()
 
     float speedFactor = 1.0f;
     if (_isInGravityTransition)
-    {
         speedFactor = _gravityTransitionSpeedFactor;
-    }
     else if (_isRecoveringFromTransition)
-    {
-        float recoveryProgress = _transitionRecoveryTimer / _transitionRecoveryDuration;
-        speedFactor = Mathf.Lerp(_gravityTransitionSpeedFactor, 1.0f, recoveryProgress);
-    }
+        speedFactor = Mathf.Lerp(_gravityTransitionSpeedFactor, 1.0f, _transitionRecoveryTimer / _transitionRecoveryDuration);
 
+    // Is the vertical thruster engaged?
+    bool verticalActive = Mathf.Abs(_verticalInput) > 0.1f;
+
+    // Choose the "up" we use to separate horizontal vs vertical
+    Vector3 effectiveUp = _isInSpace
+        ? _spaceUpVector
+        : (_gravityBody != null ? -_gravityBody.GravityDirection.normalized : Vector3.up);
+
+    // 1) Horizontal (camera-driven) movement
     if (_worldMoveDirection.magnitude > 0.1f)
     {
-        targetVelocity = _worldMoveDirection * _currentTargetSpeed * speedFactor;
+        Vector3 horiz = _worldMoveDirection * _currentTargetSpeed * speedFactor;
+
+        // ✨ Critical: if Space/Shift is held, flatten horizontal so it can't fight vertical thrust
+        if (verticalActive)
+            horiz = Vector3.ProjectOnPlane(horiz, effectiveUp);
+
+        targetVelocity = horiz;
     }
 
-    if (Mathf.Abs(_verticalInput) > 0.1f && IsPitchWithinAllowedRange())
+    // 2) Vertical thrust (Space/Shift) — DO NOT gate by camera pitch
+    if (verticalActive)
     {
-        float verticalSpeed = _verticalInput > 0 ? _ascentSpeed : _descentSpeed;
-        verticalSpeed *= speedFactor;
+        float verticalSpeed = (_verticalInput > 0 ? _ascentSpeed : _descentSpeed) * speedFactor;
 
-        if (_isInSpace && _isFlying && _isCameraPanning)
-        {
-            targetVelocity += _playerCamera.GetCameraUp() * _verticalInput * verticalSpeed;
-        }
-        else
-        {
-            Vector3 effectiveUp = _isInSpace ? _spaceUpVector
-                : (_gravityBody != null ? -_gravityBody.GravityDirection.normalized : Vector3.up);
-            targetVelocity += effectiveUp * _verticalInput * verticalSpeed;
-        }
+        // In space while panning, respect camera-up; otherwise use gravity-up
+        Vector3 upForThrust = (_isInSpace && _isFlying && _isCameraPanning && _playerCamera != null)
+            ? _playerCamera.GetCameraUp()
+            : effectiveUp;
+
+        targetVelocity += upForThrust * _verticalInput * verticalSpeed;
     }
 
+    // 3) Apply velocity (same smoothing you had)
     if (_hasMovementInput)
     {
         if (!_wasMovingLastFrame)
-        {
             _hoverStartPosition = _rigidbody.position;
-        }
 
         float lerpFactor = _isSuperSpeedActive ? Time.fixedDeltaTime * 20f : Time.fixedDeltaTime * 10f;
         if (_isInGravityTransition || _isRecoveringFromTransition) lerpFactor *= 1.5f;
 
-        float velocityDifference = (targetVelocity - currentVelocity).sqrMagnitude;
-        if (velocityDifference < 0.05f)
-        {
+        if ((targetVelocity - currentVelocity).sqrMagnitude < 0.05f)
             _rigidbody.velocity = targetVelocity;
-        }
         else
-        {
             _rigidbody.velocity = Vector3.Lerp(currentVelocity, targetVelocity, lerpFactor);
-        }
 
         _wasMovingLastFrame = true;
         _driftVelocity = _rigidbody.velocity;
     }
     else
     {
-        // Enter/maintain hover
+        // Idle/hover path unchanged
         if (_wasMovingLastFrame)
         {
             _hoverStartPosition = _rigidbody.position;
             _hoverTime = 0f;
-
             if (_isSuperSpeedActive) DeactivateSuperSpeed();
             _driftVelocity = Vector3.zero;
         }
 
-        // Kill any residual motion while hovering
         _rigidbody.velocity = Vector3.zero;
-        _rigidbody.angularVelocity = Vector3.zero;
 
         if (!_isInGravityTransition)
         {
             _hoverTime += Time.fixedDeltaTime;
             float hoverOffset = Mathf.Sin(_hoverTime * _hoverFrequency * Mathf.PI * 2f) * _hoverAmplitude;
-
-            Vector3 upDirection = _isInSpace
-                ? _spaceUpVector
-                : (_gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up);
-
-            // Physics-friendly bobbing
-            Vector3 hoverPosition = _hoverStartPosition + upDirection * hoverOffset;
-            _rigidbody.MovePosition(hoverPosition);
+            Vector3 upDir = _isInSpace ? _spaceUpVector : (_gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up);
+            _rigidbody.MovePosition(_hoverStartPosition + upDir * hoverOffset);
         }
 
         _wasMovingLastFrame = false;
