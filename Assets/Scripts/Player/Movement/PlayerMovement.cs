@@ -43,6 +43,11 @@ public class PlayerMovement : MonoBehaviour
     // Singleton for easy access from other scripts
     public static PlayerMovement instance;
 
+    private bool _freeLookLockActive;
+    private bool _waitingForCameraRealign;
+    private bool _wasLeftPanActive;
+    private Vector3 _lockedWorldMoveDirection;
+
     void Start()
     {
         // Singleton setup
@@ -76,23 +81,98 @@ public class PlayerMovement : MonoBehaviour
     }
 
     void Update()
+{
+    // 1) Ground check
+    _wasGroundedLastFrame = _isGrounded;
+    _isGrounded = CheckGrounded();
+
+    // 2) Inputs
+    float h = Input.GetAxisRaw("Horizontal");
+    float v = Input.GetAxisRaw("Vertical");
+
+    bool bothMouseButtons = Input.GetMouseButton(0) && Input.GetMouseButton(1);
+    if (bothMouseButtons)
     {
-        // 1) Ground check
-        _wasGroundedLastFrame = _isGrounded;
-        _isGrounded = CheckGrounded();
+        // WoW-style autorun: move forward relative to camera
+        h = 0f;
+        v = 1f;
 
-        // 2) Get input and calculate move direction relative to camera
-        float h = Input.GetAxisRaw("Horizontal");
-        float v = Input.GetAxisRaw("Vertical");
-
-        // Track if there's any movement input
-        _hasMovementInput = (Mathf.Abs(h) > 0.1f || Mathf.Abs(v) > 0.1f);
-
-        CalculateMoveDirection(h, v);
-
-        // 3) Update animator if available
-        UpdateAnimator();
+        // If both are down we definitely don't want free-look lock
+        _freeLookLockActive = false;
+        _waitingForCameraRealign = false;
     }
+
+    // Movement intent (WASD/Stick or autorun)
+    _hasMovementInput = (Mathf.Abs(h) > 0.1f || Mathf.Abs(v) > 0.1f);
+
+    // Calculate camera-relative move direction from input
+    CalculateMoveDirection(h, v);
+
+    // 3) LMB free-look handling (grounded movement only, not flight)
+    //    We query the camera for LMB-only panning state.
+    bool leftPanActive = _playerCamera != null && _playerCamera.IsLeftPanningActive();
+
+    // Start lock on the *rising edge* of left-pan while we already have movement input,
+    // and only if RMB isn't also down (both buttons case already handled).
+    if (!_waitingForCameraRealign &&
+        !_freeLookLockActive &&
+        leftPanActive &&
+        _hasMovementInput &&
+        !bothMouseButtons)
+    {
+        // Capture the current world direction we were moving, to keep it fixed while panning
+        if (_worldMoveDirection.sqrMagnitude > 0.001f)
+        {
+            _lockedWorldMoveDirection = _worldMoveDirection;
+        }
+        else
+        {
+            // Fallback: use player's forward projected onto the gravity plane
+            Vector3 up = _gravityBody != null ? -_gravityBody.GravityDirection.normalized : Vector3.up;
+            _lockedWorldMoveDirection = Vector3.ProjectOnPlane(transform.forward, up).normalized;
+        }
+
+        _freeLookLockActive = true;
+    }
+
+    // While free-look is active OR during the post-release realign, keep using the locked direction
+    if (_freeLookLockActive || _waitingForCameraRealign)
+    {
+        _worldMoveDirection = _lockedWorldMoveDirection;
+    }
+
+    // If movement stops or both buttons are pressed, clear locks
+    if (!_hasMovementInput || bothMouseButtons)
+    {
+        _freeLookLockActive = false;
+        _waitingForCameraRealign = false;
+    }
+
+    // Detect LMB free-look release (falling edge)
+    if (_wasLeftPanActive && !leftPanActive)
+    {
+        // If we were locking and still moving, ask camera to realign smoothly behind us.
+        if (_freeLookLockActive && _hasMovementInput && _playerCamera != null)
+        {
+            _waitingForCameraRealign = true;
+            _freeLookLockActive = false;
+
+            // Keep running straight while the camera eases behind; unlock when done.
+            _playerCamera.StartAutoAlignBehindPlayer(0.35f, () =>
+            {
+                _waitingForCameraRealign = false;
+            });
+        }
+        else
+        {
+            _freeLookLockActive = false;
+        }
+    }
+    _wasLeftPanActive = leftPanActive;
+
+    // 4) Animator
+    UpdateAnimator();
+}
 
     void FixedUpdate()
     {

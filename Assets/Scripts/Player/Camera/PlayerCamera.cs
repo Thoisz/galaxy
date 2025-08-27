@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.EventSystems;
+using System.Collections;
 
 public class PlayerCamera : MonoBehaviour
 {
@@ -106,6 +107,9 @@ public class PlayerCamera : MonoBehaviour
 
     // NEW: Public property to check panning state for other components
     public bool IsPanning => isPanning;
+
+    private bool isLeftPanning = false;
+    private Coroutine _autoAlignRoutine;
 
     private void Start()
     {
@@ -379,54 +383,90 @@ public class PlayerCamera : MonoBehaviour
     }
 
     private void HandleThirdPersonLook(Vector2 mouseDelta, bool rightMouseDown)
+{
+    bool isInSpace = gravityBody != null && gravityBody.IsInSpace;
+
+    // ✅ Don’t grab the mouse for LMB-pan if we’re over UI
+    bool pointerOverUI = UnityEngine.EventSystems.EventSystem.current != null
+                         && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject();
+
+    // LMB-only free-look (ignore if RMB also down — both buttons = autorun/steer case)
+    bool leftMouseDown = UnityEngine.InputSystem.Mouse.current != null &&
+                         UnityEngine.InputSystem.Mouse.current.leftButton.isPressed &&
+                         !rightMouseDown &&
+                         !pointerOverUI; // <-- key change
+
+    // --- RMB pan (existing behavior) ---
+    if (rightMouseDown)
     {
-        bool isInSpace = gravityBody != null && gravityBody.IsInSpace;
-
-        if (rightMouseDown)
+        if (!isPanning && !isExternallyControlledPanning)
         {
-            if (!isPanning && !isExternallyControlledPanning)
-            {
-                isPanning = true;
-                initialCursorPosition = Mouse.current.position.ReadValue();
-                LockCursor(true);
-            }
-
-            if (isInSpace)
-            {
-                if (isPanning && !wasPreviouslyPanningInSpace && (_spaceYawDegrees == 0f && _spacePitchDegrees == 0f))
-                {
-                    // Only reinitialize if we haven't already stored them
-                    Vector3 cameraForward = cameraTransform.forward;
-                    Vector3 up = currentGravityZoneUp;
-                    Vector3 flatForward = Vector3.ProjectOnPlane(cameraForward, up).normalized;
-
-                    if (flatForward.sqrMagnitude < 0.01f)
-                        flatForward = Vector3.forward;
-
-                    _spaceYawDegrees = Quaternion.LookRotation(flatForward, up).eulerAngles.y;
-                    _spacePitchDegrees = -Vector3.SignedAngle(flatForward, cameraForward, Vector3.Cross(flatForward, up));
-
-                    Debug.Log($"[SpacePanFix] Re-initialized yaw/pitch at pan start: yaw={_spaceYawDegrees}, pitch={_spacePitchDegrees}");
-                }
-
-                _spaceYawDegrees += mouseDelta.x * panSensitivity * Time.deltaTime;
-                _spacePitchDegrees += mouseDelta.y * panSensitivity * Time.deltaTime;
-                _spacePitchDegrees = Mathf.Clamp(_spacePitchDegrees, -90f, 90f);
-            }
-            else
-            {
-                _yawDegrees += mouseDelta.x * panSensitivity * Time.deltaTime;
-                _pitchDegrees += mouseDelta.y * panSensitivity * Time.deltaTime;
-                _pitchDegrees = Mathf.Clamp(_pitchDegrees, MinPitch, MaxPitch);
-            }
-        }
-        else if (isPanning && !isExternallyControlledPanning)
-        {
-            EndThirdPersonPanning();
+            isPanning = true;
+            initialCursorPosition = UnityEngine.InputSystem.Mouse.current.position.ReadValue();
+            LockCursor(true);
         }
 
-        wasPreviouslyPanningInSpace = isPanning && isInSpace;
+        if (isInSpace)
+        {
+            if (isPanning && !wasPreviouslyPanningInSpace && (_spaceYawDegrees == 0f && _spacePitchDegrees == 0f))
+            {
+                Vector3 cameraForward = cameraTransform.forward;
+                Vector3 up = currentGravityZoneUp;
+
+                Vector3 flatForward = Vector3.ProjectOnPlane(cameraForward, up).normalized;
+                if (flatForward.sqrMagnitude < 0.01f) flatForward = Vector3.forward;
+
+                _spaceYawDegrees  = Quaternion.LookRotation(flatForward, up).eulerAngles.y;
+                _spacePitchDegrees = -Vector3.SignedAngle(flatForward, cameraForward, Vector3.Cross(flatForward, up));
+                Debug.Log($"[SpacePanFix] Re-initialized yaw/pitch at pan start: yaw={_spaceYawDegrees}, pitch={_spacePitchDegrees}");
+            }
+
+            _spaceYawDegrees  += mouseDelta.x * panSensitivity * Time.deltaTime;
+            _spacePitchDegrees += mouseDelta.y * panSensitivity * Time.deltaTime;
+            _spacePitchDegrees  = Mathf.Clamp(_spacePitchDegrees, -90f, 90f);
+        }
+        else
+        {
+            _yawDegrees   += mouseDelta.x * panSensitivity * Time.deltaTime;
+            _pitchDegrees += mouseDelta.y * panSensitivity * Time.deltaTime;
+            _pitchDegrees  = Mathf.Clamp(_pitchDegrees, MinPitch, MaxPitch);
+        }
     }
+    else if (isPanning && !isExternallyControlledPanning)
+    {
+        EndThirdPersonPanning();
+    }
+
+    // --- LMB free-look pan (camera-only; does NOT steer player movement) ---
+    if (leftMouseDown)
+    {
+        if (!isLeftPanning)
+        {
+            isLeftPanning = true;
+            initialCursorPosition = UnityEngine.InputSystem.Mouse.current.position.ReadValue();
+            LockCursor(true);
+        }
+
+        if (isInSpace)
+        {
+            _spaceYawDegrees  += mouseDelta.x * panSensitivity * Time.deltaTime;
+            _spacePitchDegrees += mouseDelta.y * panSensitivity * Time.deltaTime;
+            _spacePitchDegrees  = Mathf.Clamp(_spacePitchDegrees, -90f, 90f);
+        }
+        else
+        {
+            _yawDegrees   += mouseDelta.x * panSensitivity * Time.deltaTime;
+            _pitchDegrees += mouseDelta.y * panSensitivity * Time.deltaTime;
+            _pitchDegrees  = Mathf.Clamp(_pitchDegrees, MinPitch, MaxPitch);
+        }
+    }
+    else if (isLeftPanning)
+    {
+        EndLeftPanning();
+    }
+
+    wasPreviouslyPanningInSpace = (isPanning || isLeftPanning) && isInSpace;
+}
 
     private void EndThirdPersonPanning()
     {
@@ -925,6 +965,46 @@ public class PlayerCamera : MonoBehaviour
         return isPanning;
     }
 
+    public bool AreBothMouseButtonsDown()
+{
+    // Safe check in case Mouse.current is null (rare)
+    return UnityEngine.InputSystem.Mouse.current != null &&
+           UnityEngine.InputSystem.Mouse.current.leftButton.isPressed &&
+           UnityEngine.InputSystem.Mouse.current.rightButton.isPressed;
+}
+
+public bool IsLeftPanningActive()
+{
+    bool pointerOverUI = UnityEngine.EventSystems.EventSystem.current != null
+                         && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject();
+
+    return isLeftPanning
+        && !pointerOverUI
+        && !(UnityEngine.InputSystem.Mouse.current != null && UnityEngine.InputSystem.Mouse.current.rightButton.isPressed);
+}
+
+private void EndLeftPanning()
+{
+    bool wasInSpace = gravityBody != null && gravityBody.IsInSpace;
+    Vector3 finalCameraForward = cameraTransform.forward;
+    Vector3 finalCameraUp      = cameraTransform.up;
+
+    isLeftPanning = false;
+    LockCursor(false);
+
+    if (wasInSpace)
+    {
+        // Keep current orientation stable in space
+        finalRotation = Quaternion.LookRotation(finalCameraForward, finalCameraUp);
+        cameraTransform.rotation = finalRotation;
+    }
+    else if (UnityEngine.InputSystem.Mouse.current != null)
+    {
+        // Return cursor to where it started
+        UnityEngine.InputSystem.Mouse.current.WarpCursorPosition(initialCursorPosition);
+    }
+}
+
     // This helps get smooth camera data during dash
     public void GetCameraData(out Vector3 forward, out Vector3 right, out Vector3 up)
     {
@@ -983,6 +1063,49 @@ public class PlayerCamera : MonoBehaviour
             frozenSpaceUp = currentGravityZoneUp;
         }
     }
+
+    public void StartAutoAlignBehindPlayer(float duration = 0.35f, System.Action onComplete = null)
+{
+    if (_autoAlignRoutine != null)
+        StopCoroutine(_autoAlignRoutine);
+
+    _autoAlignRoutine = StartCoroutine(AutoAlignBehindRoutine(duration, onComplete));
+}
+
+private IEnumerator AutoAlignBehindRoutine(float duration, System.Action onComplete)
+{
+    // Compute target yaw so camera looks from behind the player on the current gravity plane
+    Vector3 zoneUp = currentGravityZoneUp;
+    Vector3 playerForward = Vector3.ProjectOnPlane(playerTransform.forward, zoneUp).normalized;
+
+    if (playerForward.sqrMagnitude < 0.0001f)
+    {
+        onComplete?.Invoke();
+        yield break;
+    }
+
+    Vector3 baseForward = Vector3.ProjectOnPlane(Vector3.forward, zoneUp).normalized;
+    if (baseForward.sqrMagnitude < 0.0001f)
+        baseForward = Vector3.ProjectOnPlane(Vector3.right, zoneUp).normalized;
+
+    float startYaw  = _yawDegrees;
+    float targetYaw = SignedAngle(baseForward, playerForward, zoneUp);
+
+    float t = 0f;
+    float dur = Mathf.Max(0.01f, duration);
+
+    while (t < 1f)
+    {
+        t += Time.deltaTime / dur;
+        float eased = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(t));
+        _yawDegrees = Mathf.LerpAngle(startYaw, targetYaw, eased);
+        yield return null;
+    }
+
+    _yawDegrees = targetYaw;
+    _autoAlignRoutine = null;
+    onComplete?.Invoke();
+}
 
     public void ReleaseExternalPanControl()
     {
