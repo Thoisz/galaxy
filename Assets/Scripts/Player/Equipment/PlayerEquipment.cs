@@ -122,27 +122,25 @@ public class PlayerEquipment : MonoBehaviour
     }
     
     private AttachmentType GetAttachmentTypeForItem(EquipableItem item)
+{
+    // 1) Per-item override wins
+    EquipmentOverride overrideData = GetEquipmentOverride(item.itemName);
+    if (overrideData != null)
     {
-        // Check if there's an override that specifies the attachment type
-        EquipmentOverride overrideData = GetEquipmentOverride(item.itemName);
-        if (overrideData != null)
-        {
-            return overrideData.attachmentType;
-        }
-        
-        // Default mapping based on equipment category
-        switch (item.category)
-        {
-            case EquipmentCategory.MeleeWeapon:
-                return AttachmentType.Sword;
-            case EquipmentCategory.RangedWeapon:
-                return AttachmentType.Gun;
-            case EquipmentCategory.Accessory:
-                return AttachmentType.ChestPiece; // Default for accessories
-            default:
-                return AttachmentType.ChestPiece;
-        }
+        return overrideData.attachmentType;
     }
+
+    // 2) Default mapping based on the new data model
+    if (item.category == EquipmentCategory.Weapon)
+    {
+        return item.weaponSubtype == WeaponSubtype.Melee
+            ? AttachmentType.Sword
+            : AttachmentType.Gun;
+    }
+
+    // 3) Accessories default to ChestPiece (use overrides to route e.g. shoes)
+    return AttachmentType.ChestPiece;
+}
     
     private void EquipShoes(EquipableItem item)
     {
