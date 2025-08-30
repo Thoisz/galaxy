@@ -15712,6 +15712,30 @@ MonoBehaviour:
     appliedScaleTweak: {x: 0, y: 0, z: 0}
     appliedPositionTweak: {x: 0, y: 0, z: 0}
     appliedRotationTweak: {x: 0, y: 0, z: 0}
+  - itemName: Old Zwombs Bone
+    itemDescription: The left femur of the old Zwomb. He marked it with his signature.
+    category: 0
+    rarity: 0
+    style: 0
+    itemIcon: {fileID: 0}
+    itemPrefab: {fileID: 0}
+    weaponSubtype: 1
+    ranged_MBCDamage: 0
+    ranged_MBCCooldown: 0
+    ranged_CursorSprite: {fileID: 0}
+    ranged_XMove: 
+    ranged_ZMove: 
+    melee_MBCAmount: 3
+    melee_MBCDamages: 020000000200000006000000
+    melee_MBCComboCooldown: 0.3
+    melee_XMove: Bone Smash
+    melee_ZMove: Femurang
+    healthBonus: 0
+    staminaBonus: 0
+    speedBonus: 0
+    appliedScaleTweak: {x: 0, y: 0, z: 0}
+    appliedPositionTweak: {x: 0, y: 0, z: 0}
+    appliedRotationTweak: {x: 0, y: 0, z: 0}
   itemsScrollViewContent: {fileID: 1802929965}
   itemCardPrefabC: {fileID: 6072740933410521139, guid: 2e68883e387e53640ac45659014f64dc, type: 3}
   itemCardPrefabR: {fileID: 6072740933410521139, guid: c4e881d950cf32041b182bd44b96bc9a, type: 3}

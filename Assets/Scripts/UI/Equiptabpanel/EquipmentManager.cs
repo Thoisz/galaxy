@@ -753,8 +753,8 @@ IEnumerator SlideOutPanel(GameObject panelKey)
     // ----- RARITY / TYPE LABELS -----
     string rarityLabel = item.rarity.ToString().ToUpperInvariant();
     string typeLabel = (item.category == EquipmentCategory.Weapon)
-        ? $"{item.weaponSubtype} {item.category}".ToUpperInvariant()
-        : item.category.ToString().ToUpperInvariant();
+    ? item.weaponSubtype.ToString().ToUpperInvariant()   // "MELEE" or "RANGED"
+    : item.category.ToString().ToUpperInvariant();       // "ACCESSORY", etc.
 
     UpdatePerCardTexts(rarityLabel, typeLabel);
     ToggleRarityTypeCards(item);
