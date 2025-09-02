@@ -12,7 +12,7 @@ GameObject:
   - component: {fileID: 8103293234777098203}
   - component: {fileID: 1804619194620402865}
   m_Layer: 1
-  m_Name: boostershoes
+  m_Name: boostershoe
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -26,13 +26,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 9038138150713364350}
   serializedVersion: 2
-  m_LocalRotation: {x: -0.12484026, y: -0.12484028, z: 0.6959992, w: 0.6959992}
-  m_LocalPosition: {x: -124.614, y: 1521.592, z: -2082.341}
-  m_LocalScale: {x: 0.19867204, y: 0.26746103, z: 0.36531922}
+  m_LocalRotation: {x: -0.012174546, y: 0.4825238, z: -0.8757232, w: 0.0114698615}
+  m_LocalPosition: {x: 0, y: 0.00040715776, z: 0.00035237215}
+  m_LocalScale: {x: 0.0024518552, y: 0.0019344628, z: 0.0036434706}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: -20.338, z: 90}
+  m_LocalEulerAnglesHint: {x: 0, y: 17.664, z: 0}
 --- !u!33 &8103293234777098203
 MeshFilter:
   m_ObjectHideFlags: 0

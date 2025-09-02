@@ -41,10 +41,39 @@ public enum WeaponSubtype
 }
 
 [Serializable]
+public class AttachmentPoint
+{
+    [Tooltip("Just a label to help you tell entries apart in the inspector")]
+    public string label = "Left Shoe";
+
+    [Header("Prefab")]
+    public GameObject prefab;
+
+    [Header("Bone (drag a scene Transform here)")]
+    public Transform bone;
+
+    public enum RotationSpace { BoneLocal, CharacterRoot, World }
+
+    [Header("Local Offsets (relative to the bone)")]
+    public Vector3 localPosition = Vector3.zero;
+    public Vector3 localEulerAngles = Vector3.zero;
+    public Vector3 localScale = Vector3.one;
+
+    [Header("Rotation Offset Space")]
+    [Tooltip("BoneLocal = behaves like before.\nCharacterRoot = offset held relative to the character's facing.\nWorld = offset held in world space.")]
+    public RotationSpace rotationSpace = RotationSpace.BoneLocal;
+
+    [Tooltip("Used when RotationSpace = CharacterRoot. If left empty, the player's Animator root is used.")]
+    public Transform referenceRoot;
+}
+
+[Serializable]
 public class EquipableItem
 {
     [Header("Basic Info")]
     public string itemName;
+    [Tooltip("Unique key used by PlayerEquipment inventory. Leave blank to fall back to Item Name.")]
+    public string inspectorName;
     [TextArea(2, 6)] public string itemDescription;
     public EquipmentCategory category;       // Weapon | Accessory
     public EquipmentRarity rarity;
@@ -52,9 +81,6 @@ public class EquipableItem
 
     [Header("UI Display")]
     public Sprite itemIcon;
-
-    [Header("Item Prefab")]
-    public GameObject itemPrefab;
 
     // ---- Weapon Stats (shown only if category == Weapon) ----
     [Header("Weapon Stats")]
@@ -89,14 +115,14 @@ public class EquipableItem
     public int staminaBonus = 0;
     public float speedBonus = 0f;
 
+    [Header("3D Attachments (optional, for Accessories/Weapons etc.)")]
+    public List<AttachmentPoint> attachments = new List<AttachmentPoint>();
+
     // ---- Legacy compatibility (so old scripts still compile) ----
     [Header("Legacy Tweaks (compat)")]
     public Vector3 appliedScaleTweak = Vector3.one;
     public Vector3 appliedPositionTweak = Vector3.zero;
     public Vector3 appliedRotationTweak = Vector3.zero;
-
-    [Obsolete("Use itemPrefab instead")]
-    public GameObject item3DModel { get => itemPrefab; set => itemPrefab = value; }
 
     // Keep the melee list in sync with the amount
     public void EnsureMeleeListSize()
@@ -110,8 +136,86 @@ public class EquipableItem
 
 #endregion
 
+public class AttachmentRuntime : MonoBehaviour
+{
+    [Header("Driven by EquipmentManager")]
+    public Transform bone;
+    public Vector3 pos, eul, scl;
+    public AttachmentPoint.RotationSpace space;
+    public Transform referenceRoot; // usually animator root
+
+    [Header("Live Tuning")]
+    [Tooltip("When ON: you can grab/move/rotate/scale this object in Play Mode.\n" +
+             "Your changes are captured and converted back into pos/eul/scl in the chosen space.")]
+    public bool editMode = false;
+
+    void LateUpdate()
+    {
+        if (!bone) return;
+
+        if (editMode)
+        {
+            // 1) Read your current hand-tweaked transform…
+            pos = transform.localPosition;
+            scl = transform.localScale;
+
+            if (space == AttachmentPoint.RotationSpace.BoneLocal)
+            {
+                eul = transform.localEulerAngles;
+            }
+            else
+            {
+                // Convert current local rotation back into the offset defined in the chosen space
+                Quaternion L = transform.localRotation;         // current (user) local rot
+                Quaternion worldNow = bone.rotation * L;        // world rot of this object
+                Quaternion spaceRot = GetSpaceRotation();       // world rot of the space basis
+                Quaternion offsetWorld = worldNow * Quaternion.Inverse(bone.rotation);
+                Quaternion offsetInSpace = Quaternion.Inverse(spaceRot) * offsetWorld * spaceRot;
+                eul = offsetInSpace.eulerAngles;
+            }
+            // Do not early-return; we still apply below so the object keeps following while you edit.
+        }
+
+        // 2) Apply from stored pos/eul/scl (so it keeps following bones/root while you edit)
+        transform.localPosition = pos;
+        transform.localScale    = scl;
+
+        Quaternion offset = Quaternion.Euler(eul);
+        if (space == AttachmentPoint.RotationSpace.BoneLocal)
+        {
+            transform.localRotation = offset;
+        }
+        else
+        {
+            Quaternion spaceRot = GetSpaceRotation();
+            Quaternion offsetWorld = spaceRot * offset * Quaternion.Inverse(spaceRot);
+            Quaternion local = Quaternion.Inverse(bone.rotation) * (offsetWorld * bone.rotation);
+            transform.localRotation = local;
+        }
+    }
+
+    Quaternion GetSpaceRotation()
+    {
+        if (space == AttachmentPoint.RotationSpace.World) return Quaternion.identity;
+        if (referenceRoot) return referenceRoot.rotation;
+        return Quaternion.identity;
+    }
+
+#if UNITY_EDITOR
+    [ContextMenu("Log offsets (pos/eul/scl)")]
+    void LogOffsets()
+    {
+        Debug.Log($"{name} pos={pos} eul={eul} scl={scl}");
+        UnityEditor.EditorGUIUtility.systemCopyBuffer =
+            $"pos={pos}  eul={eul}  scl={scl}";
+    }
+#endif
+}
+
 public class EquipmentManager : MonoBehaviour
 {
+    [Header("Listing Options")]
+    public bool showOnlyOwnedItems = false; // toggle in inspector if you want the list to show only owned items
     // =========================================================
     //                  EQUIPMENT DATABASE
     // =========================================================
@@ -149,6 +253,7 @@ public TMP_Dropdown filterDropdown;
 public TMP_InputField searchInputField;
 public ScrollRect itemsScrollRect;
 public Button equipPanelCloseButton;
+public TMP_Dropdown raceDropdown;
 
 // Detail panels
 public GameObject itemDetailPanelC;
@@ -169,6 +274,15 @@ TMP_Text zMoveText;
 TMP_Text descriptionText;
 
 private ItemDetailPanelUI _currentPanelUI;
+
+// ===== EQUIPPING =====
+private PlayerMovement _playerMove;
+private EquipableItem _equippedAccessory;                     // single accessory slot
+private readonly Dictionary<EquipableItem, float> _appliedSpeedMods = new(); // item -> absolute delta applied
+
+// 3D attachment management
+private Animator _playerAnimator;
+private readonly Dictionary<EquipableItem, List<GameObject>> _spawnedAttachmentInstances = new();
 
     // =========================================================
     //             DETAIL PANEL ANIMATION SETTINGS
@@ -203,13 +317,31 @@ private ItemDetailPanelUI _currentPanelUI;
     }
 
     void Start()
-    {
-        CacheOriginalDetailPositions();
-        EnsureDetailPanelsUnderMainPanels();
-        WireUI();
-        RefreshDisplay();
-        CloseAllDetailPanelsImmediate();
-    }
+{
+    TryResolvePlayerRefs();
+
+    CacheOriginalDetailPositions();
+    EnsureDetailPanelsUnderMainPanels();
+    WireUI();
+
+    var pe = PlayerEquipment.Instance;
+    if (pe) pe.InventoryChanged += RefreshDisplay;
+
+    RefreshDisplay();
+    CloseAllDetailPanelsImmediate();
+}
+
+void OnEnable()
+{
+    var pe = PlayerEquipment.Instance;
+    if (pe != null) pe.InventoryChanged += RefreshDisplay;
+}
+
+void OnDisable()
+{
+    var pe = PlayerEquipment.Instance;
+    if (pe != null) pe.InventoryChanged -= RefreshDisplay;
+}
 
     // =========================================================
     //                        UI WIRING
@@ -233,15 +365,14 @@ private ItemDetailPanelUI _currentPanelUI;
     if (equipPanelCloseButton != null)
     {
         equipPanelCloseButton.onClick.RemoveAllListeners();
-        // CLOSE THE WHOLE EQUIP TAB (like B key), not the detail panel.
         equipPanelCloseButton.onClick.AddListener(CloseWholeEquipTab);
     }
 
-    // Equip button clicks just a placeholder for now
-    if (equipButtonC) { equipButtonC.onClick.RemoveAllListeners(); equipButtonC.onClick.AddListener(() => Debug.Log("Equip (C)")); }
-    if (equipButtonR) { equipButtonR.onClick.RemoveAllListeners(); equipButtonR.onClick.AddListener(() => Debug.Log("Equip (R)")); }
-    if (equipButtonL) { equipButtonL.onClick.RemoveAllListeners(); equipButtonL.onClick.AddListener(() => Debug.Log("Equip (L)")); }
-    if (equipButtonE) { equipButtonE.onClick.RemoveAllListeners(); equipButtonE.onClick.AddListener(() => Debug.Log("Equip (E)")); }
+if (equipButtonC) { equipButtonC.onClick.RemoveAllListeners(); equipButtonC.onClick.AddListener(OnEquipButtonPressed); }
+if (equipButtonR) { equipButtonR.onClick.RemoveAllListeners(); equipButtonR.onClick.AddListener(OnEquipButtonPressed); }
+if (equipButtonL) { equipButtonL.onClick.RemoveAllListeners(); equipButtonL.onClick.AddListener(OnEquipButtonPressed); }
+if (equipButtonE) { equipButtonE.onClick.RemoveAllListeners(); equipButtonE.onClick.AddListener(OnEquipButtonPressed); }
+
 }
 
     void RebindDetailTextsTo(GameObject panelKey)
@@ -283,6 +414,172 @@ void ConfigurePagerFor(EquipableItem item, GameObject panelKey)
             pager.GoToPage(0, true);
         }
     }
+}
+
+void OnEquipButtonPressed()
+{
+    if (_currentDetailItem == null) return;
+
+    // Block if not owned
+    if (!PlayerOwns(_currentDetailItem))
+    {
+        Debug.Log($"'{_currentDetailItem.itemName}' is locked. Acquire it before equipping.");
+        // (Optional) flash the button, play a sound, etc.
+        return;
+    }
+
+    if (_currentDetailItem.category == EquipmentCategory.Accessory)
+    {
+        if (IsAccessoryEquipped(_currentDetailItem))
+            UnequipAccessory(_currentDetailItem);
+        else
+            EquipAccessory(_currentDetailItem);
+
+        UpdateEquipButtonLabelFor(_currentDetailItem);
+    }
+    else
+    {
+        Debug.Log($"Equip pressed on non-accessory: {_currentDetailItem.itemName}");
+    }
+}
+
+bool IsAccessoryEquipped(EquipableItem item) => _equippedAccessory == item;
+
+void EquipAccessory(EquipableItem item)
+{
+    if (item == null) return;
+    if (!PlayerOwns(item)) { Debug.LogWarning($"Tried to equip '{item.itemName}' but it's not owned."); return; }
+
+    // Resolve refs on-demand
+    TryResolvePlayerRefs();
+
+    // Unequip previous if different
+    if (_equippedAccessory != null && _equippedAccessory != item)
+        UnequipAccessory(_equippedAccessory);
+
+    // Apply speed bonus if we have PlayerMovement
+    if (_playerMove != null)
+    {
+        float delta = _playerMove.GetBaseMoveSpeed() * (item.speedBonus / 100f);
+        _playerMove.AddSpeedModifier(delta);
+        _appliedSpeedMods[item] = delta;
+    }
+
+    // Always attach prefabs to bones (doesn't require the Animator itself if bones are assigned)
+    AttachItemPrefabs(item);
+
+    _equippedAccessory = item;
+    Debug.Log($"Equipped accessory '{item.itemName}' (+{item.speedBonus}% speed if PlayerMovement present).");
+}
+
+void UnequipAccessory(EquipableItem item)
+{
+    if (item == null) return;
+
+    TryResolvePlayerRefs();
+
+    if (_playerMove != null && _appliedSpeedMods.TryGetValue(item, out float delta))
+    {
+        _playerMove.RemoveSpeedModifier(delta);
+        _appliedSpeedMods.Remove(item);
+    }
+
+    if (_equippedAccessory == item) _equippedAccessory = null;
+
+    DetachItemPrefabs(item);
+    Debug.Log($"Unequipped accessory '{item.itemName}'.");
+}
+
+void AttachItemPrefabs(EquipableItem item)
+{
+    if (item == null || item.attachments == null) return;
+
+    // In case we re-equip the same item without unequipping
+    DetachItemPrefabs(item);
+
+    var spawned = new List<GameObject>();
+    _spawnedAttachmentInstances[item] = spawned;
+
+    foreach (var ap in item.attachments)
+    {
+        if (ap == null || ap.prefab == null)
+            continue;
+
+        Transform bone = ResolveAttachmentBone(ap);
+        if (bone == null)
+        {
+            Debug.LogWarning(
+                $"Attachment '{ap.label}': Bone reference is missing. " +
+                $"Drag the correct foot/hand/etc. Transform into the 'Bone' field on the item.");
+            continue;
+        }
+
+        var inst = Instantiate(ap.prefab, bone, false);
+        inst.name = $"Equipped_{item.itemName}_{ap.label}";
+
+        var t = inst.transform;
+        t.localPosition = ap.localPosition;
+        t.localRotation = Quaternion.Euler(ap.localEulerAngles);
+        t.localScale    = ap.localScale;
+
+        // Remove legacy driver if present
+        var oldRuntime = inst.GetComponent<AttachmentRuntime>();
+        if (oldRuntime) Destroy(oldRuntime);
+
+        spawned.Add(inst);
+    }
+}
+
+// --- Auto-resolve player refs without inspector wiring ---
+void TryResolvePlayerRefs()
+{
+    if (_playerMove != null && _playerAnimator != null) return;
+
+    // Prefer the PlayerEquipment singleton as our anchor
+    Transform root = PlayerEquipment.Instance ? PlayerEquipment.Instance.transform : null;
+
+    // Fallbacks
+    if (root == null)
+    {
+        var playerTagged = GameObject.FindGameObjectWithTag("Player");
+        if (playerTagged) root = playerTagged.transform;
+    }
+    if (root == null)
+    {
+        var pmAny = FindObjectOfType<PlayerMovement>();
+        if (pmAny) root = pmAny.transform;
+    }
+
+    // Fill _playerMove
+    if (_playerMove == null)
+    {
+        _playerMove = root ? root.GetComponentInChildren<PlayerMovement>(true) : null;
+        if (_playerMove == null) _playerMove = FindObjectOfType<PlayerMovement>();
+    }
+
+    // Fill _playerAnimator (used for future bone lookups; not required to attach to explicit bones)
+    if (_playerAnimator == null)
+    {
+        _playerAnimator = root ? root.GetComponentInChildren<Animator>(true) : null;
+        if (_playerAnimator == null) _playerAnimator = FindObjectOfType<Animator>();
+    }
+}
+
+void DetachItemPrefabs(EquipableItem item)
+{
+    if (_spawnedAttachmentInstances.TryGetValue(item, out var spawned))
+    {
+        for (int i = 0; i < spawned.Count; i++)
+            if (spawned[i]) Destroy(spawned[i]);
+        spawned.Clear();
+        _spawnedAttachmentInstances.Remove(item);
+    }
+}
+
+// --- Bone resolver (kept tiny & explicit) ---
+Transform ResolveAttachmentBone(AttachmentPoint ap)
+{
+    return ap != null ? ap.bone : null;
 }
 
     void UpdatePerCardTexts(string rarityLabel, string typeLabel)
@@ -424,6 +721,24 @@ IEnumerator SlideDownWithEquipPanel(GameObject panelKey)
     ResetAllDetailPanelsToOriginalPositions();
 }
 
+bool PlayerOwns(EquipableItem item)
+{
+    if (item == null) return false;
+
+    var pe = PlayerEquipment.Instance;
+    if (pe == null) return false;
+
+    // Prefer inspectorName, fall back to itemName
+    string key = !string.IsNullOrWhiteSpace(item.inspectorName) ? item.inspectorName : item.itemName;
+    if (string.IsNullOrWhiteSpace(key)) return false;
+
+    // Accept either key or old itemName (backward compat)
+    if (pe.HasInInventory(key)) return true;
+    if (!string.Equals(key, item.itemName, StringComparison.Ordinal) && pe.HasInInventory(item.itemName)) return true;
+
+    return false;
+}
+
 void ResetAllDetailPanelsToOriginalPositions()
 {
     void ResetOne(GameObject key)
@@ -448,32 +763,68 @@ void ResetAllDetailPanelsToOriginalPositions()
     _isAnimating = false;
 }
 
-    void FilterDatabase()
+    // Add this once somewhere in the class (near your other public fields):
+// [Header("Listing Options")]
+// public bool showOnlyOwnedItems = false;
+
+void FilterDatabase()
+{
+    string search = (searchInputField ? searchInputField.text : "").Trim().ToLower();
+    int categoryFilter = filterDropdown ? filterDropdown.value : 0;
+
+    var pe = PlayerEquipment.Instance;
+    if (pe == null) { _filtered = new List<EquipableItem>(); return; }
+
+    // Build order map from PlayerEquipment inventory
+    // Use inspectorName when available; fall back to itemName
+    var order = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    var inv = pe.Inventory;
+    for (int i = 0; i < inv.Count; i++)
     {
-        string search = searchInputField != null ? searchInputField.text.Trim().ToLower() : string.Empty;
-        int filter = filterDropdown != null ? filterDropdown.value : 0; // 0=All,1=Weapons,2=Accessories
-
-        _filtered = equipmentDatabase
-            .Where(it =>
-            {
-                if (it == null) return false;
-
-                // Filter by category
-                bool pass = filter switch
-                {
-                    1 => it.category == EquipmentCategory.Weapon,
-                    2 => it.category == EquipmentCategory.Accessory,
-                    _ => true
-                };
-
-                // Search by name
-                if (pass && !string.IsNullOrEmpty(search))
-                    pass = (it.itemName ?? "").ToLower().Contains(search);
-
-                return pass;
-            })
-            .ToList();
+        // first occurrence wins
+        if (!order.ContainsKey(inv[i])) order[inv[i]] = i;
     }
+
+    // Helper to get the key we store in inventory for an item
+    int IndexFor(EquipableItem it)
+    {
+        string key = !string.IsNullOrWhiteSpace(it.inspectorName) ? it.inspectorName : it.itemName;
+        if (key == null) return int.MaxValue;
+
+        // Prefer inspector key; also accept legacy itemName position if present
+        if (order.TryGetValue(key, out int idx)) return idx;
+        if (!string.Equals(key, it.itemName, StringComparison.Ordinal) &&
+            order.TryGetValue(it.itemName ?? "", out idx)) return idx;
+
+        return int.MaxValue; // should not happen because we only keep owned items, but safe fallback
+    }
+
+    _filtered = equipmentDatabase
+        .Where(it =>
+        {
+            if (it == null) return false;
+
+            // Only show items the player OWNS
+            if (!PlayerOwns(it)) return false;
+
+            // Category filter (0=All,1=Weapons,2=Accessories)
+            if (categoryFilter == 1 && it.category != EquipmentCategory.Weapon) return false;
+            if (categoryFilter == 2 && it.category != EquipmentCategory.Accessory) return false;
+
+            // Search matches Item Name OR Inspector Name
+            if (!string.IsNullOrEmpty(search))
+            {
+                string display = (it.itemName ?? "").ToLower();
+                string key     = (it.inspectorName ?? "").ToLower();
+                if (!display.Contains(search) && !key.Contains(search)) return false;
+            }
+
+            return true;
+        })
+        .OrderBy(it => IndexFor(it))                   // <-- sort by PlayerEquipment order
+        .ThenBy(it => it.itemName ?? string.Empty)     // stable fallback if needed
+        .ToList();
+}
 
     void SpawnCards()
     {
@@ -779,6 +1130,44 @@ IEnumerator SlideOutPanel(GameObject panelKey)
 
     if (xMoveText) xMoveText.text = x;
     if (zMoveText) zMoveText.text = z;
+
+    UpdateEquipButtonLabelFor(item);
+}
+
+void UpdateEquipButtonLabelFor(EquipableItem item)
+{
+    void SetState(Button b, string text, bool interactable)
+    {
+        if (!b) return;
+        var t = b.GetComponentInChildren<TMPro.TMP_Text>(true);
+        if (t) t.text = text;
+        b.interactable = interactable;
+    }
+
+    if (item == null)
+    {
+        SetState(equipButtonC, "Equip", false);
+        SetState(equipButtonR, "Equip", false);
+        SetState(equipButtonL, "Equip", false);
+        SetState(equipButtonE, "Equip", false);
+        return;
+    }
+
+    bool owns = PlayerOwns(item);
+    if (!owns)
+    {
+        SetState(equipButtonC, "Locked", false);
+        SetState(equipButtonR, "Locked", false);
+        SetState(equipButtonL, "Locked", false);
+        SetState(equipButtonE, "Locked", false);
+        return;
+    }
+
+    string label = IsAccessoryEquipped(item) ? "Unequip" : "Equip";
+    SetState(equipButtonC, label, true);
+    SetState(equipButtonR, label, true);
+    SetState(equipButtonL, label, true);
+    SetState(equipButtonE, label, true);
 }
 
     void ToggleRarityTypeCards(EquipableItem item)
@@ -824,180 +1213,235 @@ IEnumerator SlideOutPanel(GameObject panelKey)
 // ============================================================================
 //                              CUSTOM INSPECTOR
 // ============================================================================
-[CustomEditor(typeof(EquipmentManager))]
-public class EquipmentManagerEditor : Editor
+[UnityEditor.CustomEditor(typeof(EquipmentManager))]
+public class EquipmentManagerEditor : UnityEditor.Editor
 {
-    SerializedProperty equipmentDatabase;
+    // --- inspector-only filter state ---
+    private static int _inspectorStyleIndex = 0;   // 0 = All, then EquipmentStyle order
+    private static string _inspectorSearch = "";
+    private static System.Collections.Generic.List<string> _styleOptions;
 
-    // UI Refs
-SerializedProperty itemsScrollViewContent;
-SerializedProperty itemCardPrefabC, itemCardPrefabR, itemCardPrefabL, itemCardPrefabE;
+    // Serialized fields (runtime hookups)
+    UnityEditor.SerializedProperty equipmentDatabase;
 
-SerializedProperty rarityCardC, typeCardC, rarityCardR, typeCardR, rarityCardL, typeCardL, rarityCardE, typeCardE;
-SerializedProperty rarityCardCText, typeCardCText, rarityCardRText, typeCardRText, rarityCardLText, typeCardLText, rarityCardEText, typeCardEText;
+    UnityEditor.SerializedProperty itemsScrollViewContent;
+    UnityEditor.SerializedProperty itemCardPrefabC, itemCardPrefabR, itemCardPrefabL, itemCardPrefabE;
 
-SerializedProperty filterDropdown, searchInputField, itemsScrollRect, equipPanelCloseButton;
+    UnityEditor.SerializedProperty rarityCardC, typeCardC, rarityCardR, typeCardR, rarityCardL, typeCardL, rarityCardE, typeCardE;
+    UnityEditor.SerializedProperty rarityCardCText, typeCardCText, rarityCardRText, typeCardRText, rarityCardLText, typeCardLText, rarityCardEText, typeCardEText;
 
-SerializedProperty itemDetailPanelC, itemDetailPanelR, itemDetailPanelL, itemDetailPanelE, exoticDetailRainbowBackground;
+    UnityEditor.SerializedProperty filterDropdown, searchInputField, itemsScrollRect, equipPanelCloseButton;
 
-SerializedProperty equipButtonC, equipButtonR, equipButtonL, equipButtonE;
+    UnityEditor.SerializedProperty itemDetailPanelC, itemDetailPanelR, itemDetailPanelL, itemDetailPanelE, exoticDetailRainbowBackground;
 
-    // Anim
-    SerializedProperty slideAnimationDuration, slideStartOffset, positionOffset, slideCurve;
+    UnityEditor.SerializedProperty equipButtonC, equipButtonR, equipButtonL, equipButtonE;
 
-    void OnEnable()
+    UnityEditor.SerializedProperty slideAnimationDuration, slideStartOffset, positionOffset, slideCurve;
+
+    // In EquipmentManagerEditor (the custom inspector), REPLACE OnEnable with this:
+void OnEnable()
 {
-    equipmentDatabase = serializedObject.FindProperty("equipmentDatabase");
+    // Database
+    equipmentDatabase = serializedObject.FindProperty(nameof(EquipmentManager.equipmentDatabase));
 
-    itemsScrollViewContent = serializedObject.FindProperty("itemsScrollViewContent");
-    itemCardPrefabC = serializedObject.FindProperty("itemCardPrefabC");
-    itemCardPrefabR = serializedObject.FindProperty("itemCardPrefabR");
-    itemCardPrefabL = serializedObject.FindProperty("itemCardPrefabL");
-    itemCardPrefabE = serializedObject.FindProperty("itemCardPrefabE");
+    // List container + card prefabs
+    itemsScrollViewContent = serializedObject.FindProperty(nameof(EquipmentManager.itemsScrollViewContent));
+    itemCardPrefabC        = serializedObject.FindProperty(nameof(EquipmentManager.itemCardPrefabC));
+    itemCardPrefabR        = serializedObject.FindProperty(nameof(EquipmentManager.itemCardPrefabR));
+    itemCardPrefabL        = serializedObject.FindProperty(nameof(EquipmentManager.itemCardPrefabL));
+    itemCardPrefabE        = serializedObject.FindProperty(nameof(EquipmentManager.itemCardPrefabE));
 
-    rarityCardC = serializedObject.FindProperty("rarityCardC");
-    typeCardC   = serializedObject.FindProperty("typeCardC");
-    rarityCardR = serializedObject.FindProperty("rarityCardR");
-    typeCardR   = serializedObject.FindProperty("typeCardR");
-    rarityCardL = serializedObject.FindProperty("rarityCardL");
-    typeCardL   = serializedObject.FindProperty("typeCardL");
-    rarityCardE = serializedObject.FindProperty("rarityCardE");
-    typeCardE   = serializedObject.FindProperty("typeCardE");
+    // Per-rarity cards
+    rarityCardC = serializedObject.FindProperty(nameof(EquipmentManager.rarityCardC));
+    typeCardC   = serializedObject.FindProperty(nameof(EquipmentManager.typeCardC));
+    rarityCardR = serializedObject.FindProperty(nameof(EquipmentManager.rarityCardR));
+    typeCardR   = serializedObject.FindProperty(nameof(EquipmentManager.typeCardR));
+    rarityCardL = serializedObject.FindProperty(nameof(EquipmentManager.rarityCardL));
+    typeCardL   = serializedObject.FindProperty(nameof(EquipmentManager.typeCardL));
+    rarityCardE = serializedObject.FindProperty(nameof(EquipmentManager.rarityCardE));
+    typeCardE   = serializedObject.FindProperty(nameof(EquipmentManager.typeCardE));
 
-    rarityCardCText = serializedObject.FindProperty("rarityCardCText");
-    typeCardCText   = serializedObject.FindProperty("typeCardCText");
-    rarityCardRText = serializedObject.FindProperty("rarityCardRText");
-    typeCardRText   = serializedObject.FindProperty("typeCardRText");
-    rarityCardLText = serializedObject.FindProperty("rarityCardLText");
-    typeCardLText   = serializedObject.FindProperty("typeCardLText");
-    rarityCardEText = serializedObject.FindProperty("rarityCardEText");
-    typeCardEText   = serializedObject.FindProperty("typeCardEText");
+    // Per-rarity label texts
+    rarityCardCText = serializedObject.FindProperty(nameof(EquipmentManager.rarityCardCText));
+    typeCardCText   = serializedObject.FindProperty(nameof(EquipmentManager.typeCardCText));
+    rarityCardRText = serializedObject.FindProperty(nameof(EquipmentManager.rarityCardRText));
+    typeCardRText   = serializedObject.FindProperty(nameof(EquipmentManager.typeCardRText));
+    rarityCardLText = serializedObject.FindProperty(nameof(EquipmentManager.rarityCardLText));
+    typeCardLText   = serializedObject.FindProperty(nameof(EquipmentManager.typeCardLText));
+    rarityCardEText = serializedObject.FindProperty(nameof(EquipmentManager.rarityCardEText));
+    typeCardEText   = serializedObject.FindProperty(nameof(EquipmentManager.typeCardEText));
 
-    filterDropdown = serializedObject.FindProperty("filterDropdown");
-    searchInputField = serializedObject.FindProperty("searchInputField");
-    itemsScrollRect = serializedObject.FindProperty("itemsScrollRect");
-    equipPanelCloseButton = serializedObject.FindProperty("equipPanelCloseButton");
+    // List / search UI
+    filterDropdown        = serializedObject.FindProperty(nameof(EquipmentManager.filterDropdown));
+    searchInputField      = serializedObject.FindProperty(nameof(EquipmentManager.searchInputField));
+    itemsScrollRect       = serializedObject.FindProperty(nameof(EquipmentManager.itemsScrollRect));
+    equipPanelCloseButton = serializedObject.FindProperty(nameof(EquipmentManager.equipPanelCloseButton));
 
-    itemDetailPanelC = serializedObject.FindProperty("itemDetailPanelC");
-    itemDetailPanelR = serializedObject.FindProperty("itemDetailPanelR");
-    itemDetailPanelL = serializedObject.FindProperty("itemDetailPanelL");
-    itemDetailPanelE = serializedObject.FindProperty("itemDetailPanelE");
-    exoticDetailRainbowBackground = serializedObject.FindProperty("exoticDetailRainbowBackground");
+    // Detail panels
+    itemDetailPanelC              = serializedObject.FindProperty(nameof(EquipmentManager.itemDetailPanelC));
+    itemDetailPanelR              = serializedObject.FindProperty(nameof(EquipmentManager.itemDetailPanelR));
+    itemDetailPanelL              = serializedObject.FindProperty(nameof(EquipmentManager.itemDetailPanelL));
+    itemDetailPanelE              = serializedObject.FindProperty(nameof(EquipmentManager.itemDetailPanelE));
+    exoticDetailRainbowBackground = serializedObject.FindProperty(nameof(EquipmentManager.exoticDetailRainbowBackground));
 
-    equipButtonC = serializedObject.FindProperty("equipButtonC");
-    equipButtonR = serializedObject.FindProperty("equipButtonR");
-    equipButtonL = serializedObject.FindProperty("equipButtonL");
-    equipButtonE = serializedObject.FindProperty("equipButtonE");
+    // Equip buttons
+    equipButtonC = serializedObject.FindProperty(nameof(EquipmentManager.equipButtonC));
+    equipButtonR = serializedObject.FindProperty(nameof(EquipmentManager.equipButtonR));
+    equipButtonL = serializedObject.FindProperty(nameof(EquipmentManager.equipButtonL));
+    equipButtonE = serializedObject.FindProperty(nameof(EquipmentManager.equipButtonE));
 
-    slideAnimationDuration = serializedObject.FindProperty("slideAnimationDuration");
-    slideStartOffset = serializedObject.FindProperty("slideStartOffset");
-    positionOffset = serializedObject.FindProperty("positionOffset");
-    slideCurve = serializedObject.FindProperty("slideCurve");
+    // Animation settings
+    slideAnimationDuration = serializedObject.FindProperty(nameof(EquipmentManager.slideAnimationDuration));
+    slideStartOffset       = serializedObject.FindProperty(nameof(EquipmentManager.slideStartOffset));
+    positionOffset         = serializedObject.FindProperty(nameof(EquipmentManager.positionOffset));
+    slideCurve             = serializedObject.FindProperty(nameof(EquipmentManager.slideCurve));
+
+    // Build inspector filter options
+    _styleOptions = new System.Collections.Generic.List<string> { "All" };
+    _styleOptions.AddRange(System.Enum.GetNames(typeof(EquipmentStyle)));
 }
 
     public override void OnInspectorGUI()
+{
+    // Safety: if the style list wasn't built (domain reload quirks), rebuild here.
+    if (_styleOptions == null || _styleOptions.Count == 0)
     {
-        serializedObject.Update();
-
-        // ================== DATABASE LIST ==================
-        EditorGUILayout.LabelField("Equipment Database (ALL available items)", EditorStyles.boldLabel);
-        DrawDatabaseList(equipmentDatabase);
-        EditorGUILayout.Space(8);
-
-        // ================== UI References ==================
-        EditorGUILayout.LabelField("UI References", EditorStyles.boldLabel);
-
-// Prefabs
-EditorGUILayout.PropertyField(itemsScrollViewContent, new GUIContent("ItemsScrollView Content"));
-EditorGUILayout.PropertyField(itemCardPrefabC, new GUIContent("Item Card Prefab C"));
-EditorGUILayout.PropertyField(itemCardPrefabR, new GUIContent("Item Card Prefab R"));
-EditorGUILayout.PropertyField(itemCardPrefabL, new GUIContent("Item Card Prefab L"));
-EditorGUILayout.PropertyField(itemCardPrefabE, new GUIContent("Item Card Prefab E"));
-
-// Cards + texts
-EditorGUILayout.Space(4);
-EditorGUILayout.LabelField("Per-Rarity Cards", EditorStyles.boldLabel);
-
-EditorGUILayout.PropertyField(rarityCardC);
-EditorGUILayout.PropertyField(rarityCardCText, new GUIContent("Rarity Card C Text"));
-EditorGUILayout.PropertyField(typeCardC);
-EditorGUILayout.PropertyField(typeCardCText,   new GUIContent("Type Card C Text"));
-
-EditorGUILayout.PropertyField(rarityCardR);
-EditorGUILayout.PropertyField(rarityCardRText, new GUIContent("Rarity Card R Text"));
-EditorGUILayout.PropertyField(typeCardR);
-EditorGUILayout.PropertyField(typeCardRText,   new GUIContent("Type Card R Text"));
-
-EditorGUILayout.PropertyField(rarityCardL);
-EditorGUILayout.PropertyField(rarityCardLText, new GUIContent("Rarity Card L Text"));
-EditorGUILayout.PropertyField(typeCardL);
-EditorGUILayout.PropertyField(typeCardLText,   new GUIContent("Type Card L Text"));
-
-EditorGUILayout.PropertyField(rarityCardE);
-EditorGUILayout.PropertyField(rarityCardEText, new GUIContent("Rarity Card E Text"));
-EditorGUILayout.PropertyField(typeCardE);
-EditorGUILayout.PropertyField(typeCardEText,   new GUIContent("Type Card E Text"));
-
-// List/search
-EditorGUILayout.Space(4);
-EditorGUILayout.PropertyField(filterDropdown, new GUIContent("Filter Dropdown"));
-EditorGUILayout.PropertyField(searchInputField, new GUIContent("Search Input Field"));
-EditorGUILayout.PropertyField(itemsScrollRect, new GUIContent("Items Scroll Rect"));
-EditorGUILayout.PropertyField(equipPanelCloseButton, new GUIContent("Equip Panel Close Button"));
-
-// Detail panels
-EditorGUILayout.Space(4);
-EditorGUILayout.PropertyField(itemDetailPanelC);
-EditorGUILayout.PropertyField(itemDetailPanelR);
-EditorGUILayout.PropertyField(itemDetailPanelL);
-EditorGUILayout.PropertyField(itemDetailPanelE);
-EditorGUILayout.PropertyField(exoticDetailRainbowBackground);
-
-// Equip buttons
-EditorGUILayout.Space(4);
-EditorGUILayout.PropertyField(equipButtonC);
-EditorGUILayout.PropertyField(equipButtonR);
-EditorGUILayout.PropertyField(equipButtonL);
-EditorGUILayout.PropertyField(equipButtonE);
-
-// Moves/description
-EditorGUILayout.Space(4);
-
-        // Animation (header comes from [Header] attribute)
-EditorGUILayout.Space(6);
-EditorGUILayout.PropertyField(slideAnimationDuration, new GUIContent("Slide Animation Duration"));
-EditorGUILayout.PropertyField(slideStartOffset, new GUIContent("Slide Start Offset"));
-EditorGUILayout.PropertyField(positionOffset, new GUIContent("Position Offset"));
-EditorGUILayout.PropertyField(slideCurve, new GUIContent("Slide Curve"));
-
-        serializedObject.ApplyModifiedProperties();
+        _styleOptions = new System.Collections.Generic.List<string> { "All" };
+        _styleOptions.AddRange(System.Enum.GetNames(typeof(EquipmentStyle)));
     }
 
-    void DrawDatabaseList(SerializedProperty listProp)
+    serializedObject.Update();
+
+    // Local helper that won't NRE if a binding failed.
+    void PF(UnityEditor.SerializedProperty p, string label)
+    {
+        if (p != null)
+            UnityEditor.EditorGUILayout.PropertyField(p, new UnityEngine.GUIContent(label));
+        else
+            UnityEditor.EditorGUILayout.HelpBox($"Missing SerializedProperty for \"{label}\". " +
+                $"Check the field name on EquipmentManager.", UnityEditor.MessageType.Warning);
+    }
+
+    // ===== Inspector-only filters =====
+    DrawInspectorFilters();
+
+    // ===== Database list (filtered) =====
+    UnityEditor.EditorGUILayout.Space(6);
+    UnityEditor.EditorGUILayout.LabelField("Equipment Database (ALL available items)", UnityEditor.EditorStyles.boldLabel);
+    if (equipmentDatabase != null)
+        DrawDatabaseListFiltered(equipmentDatabase);
+    else
+        UnityEditor.EditorGUILayout.HelpBox("equipmentDatabase property not found.", UnityEditor.MessageType.Warning);
+    UnityEditor.EditorGUILayout.Space(8);
+
+    // ===== UI References (runtime hookups) =====
+    UnityEditor.EditorGUILayout.LabelField("UI References", UnityEditor.EditorStyles.boldLabel);
+
+    PF(itemsScrollViewContent, "ItemsScrollView Content");
+    PF(itemCardPrefabC,       "Item Card Prefab C");
+    PF(itemCardPrefabR,       "Item Card Prefab R");
+    PF(itemCardPrefabL,       "Item Card Prefab L");
+    PF(itemCardPrefabE,       "Item Card Prefab E");
+
+    UnityEditor.EditorGUILayout.Space(4);
+    UnityEditor.EditorGUILayout.LabelField("Per-Rarity Cards", UnityEditor.EditorStyles.boldLabel);
+    PF(rarityCardC,           "Rarity Card C");
+    PF(rarityCardCText,       "Rarity Card C Text");
+    PF(typeCardC,             "Type Card C");
+    PF(typeCardCText,         "Type Card C Text");
+
+    PF(rarityCardR,           "Rarity Card R");
+    PF(rarityCardRText,       "Rarity Card R Text");
+    PF(typeCardR,             "Type Card R");
+    PF(typeCardRText,         "Type Card R Text");
+
+    PF(rarityCardL,           "Rarity Card L");
+    PF(rarityCardLText,       "Rarity Card L Text");
+    PF(typeCardL,             "Type Card L");
+    PF(typeCardLText,         "Type Card L Text");
+
+    PF(rarityCardE,           "Rarity Card E");
+    PF(rarityCardEText,       "Rarity Card E Text");
+    PF(typeCardE,             "Type Card E");
+    PF(typeCardEText,         "Type Card E Text");
+
+    UnityEditor.EditorGUILayout.Space(4);
+    PF(filterDropdown,        "Category Filter Dropdown");
+    PF(searchInputField,      "Search Input Field");
+    PF(itemsScrollRect,       "Items Scroll Rect");
+    PF(equipPanelCloseButton, "Equip Panel Close Button");
+
+    UnityEditor.EditorGUILayout.Space(4);
+    PF(itemDetailPanelC,            "Item Detail Panel C");
+    PF(itemDetailPanelR,            "Item Detail Panel R");
+    PF(itemDetailPanelL,            "Item Detail Panel L");
+    PF(itemDetailPanelE,            "Item Detail Panel E");
+    PF(exoticDetailRainbowBackground,"Exotic Rainbow BG");
+
+    UnityEditor.EditorGUILayout.Space(4);
+    PF(equipButtonC, "Equip Button C");
+    PF(equipButtonR, "Equip Button R");
+    PF(equipButtonL, "Equip Button L");
+    PF(equipButtonE, "Equip Button E");
+
+    UnityEditor.EditorGUILayout.Space(6);
+    PF(slideAnimationDuration, "Slide Animation Duration");
+    PF(slideStartOffset,       "Slide Start Offset");
+    PF(positionOffset,         "Position Offset");
+    PF(slideCurve,             "Slide Curve");
+
+    serializedObject.ApplyModifiedProperties();
+}
+
+    // -------- Inspector-only UI --------
+    void DrawInspectorFilters()
+    {
+        UnityEditor.EditorGUILayout.BeginVertical("HelpBox");
+        UnityEditor.EditorGUILayout.LabelField("Database Filters (Inspector-only)", UnityEditor.EditorStyles.boldLabel);
+
+        _inspectorStyleIndex = UnityEditor.EditorGUILayout.Popup("Race / Style", _inspectorStyleIndex, _styleOptions.ToArray());
+        _inspectorSearch = UnityEditor.EditorGUILayout.TextField("Search Name", _inspectorSearch ?? "");
+
+        UnityEditor.EditorGUILayout.BeginHorizontal();
+        GUILayout.FlexibleSpace();
+        if (GUILayout.Button("Clear Filters", GUILayout.Width(110)))
+        {
+            _inspectorStyleIndex = 0;
+            _inspectorSearch = "";
+            GUI.FocusControl(null);
+        }
+        UnityEditor.EditorGUILayout.EndHorizontal();
+
+        UnityEditor.EditorGUILayout.EndVertical();
+    }
+
+    void DrawDatabaseListFiltered(UnityEditor.SerializedProperty listProp)
     {
         for (int i = 0; i < listProp.arraySize; i++)
         {
             var element = listProp.GetArrayElementAtIndex(i);
-            var box = new GUIStyle("HelpBox");
-            EditorGUILayout.BeginVertical(box);
+            if (!PassesInspectorFilter(element)) continue;
 
-            EditorGUILayout.BeginHorizontal();
-            element.isExpanded = EditorGUILayout.Foldout(element.isExpanded, $"Item {i + 1}", true);
+            var box = new GUIStyle("HelpBox");
+            UnityEditor.EditorGUILayout.BeginVertical(box);
+
+            UnityEditor.EditorGUILayout.BeginHorizontal();
+            element.isExpanded = UnityEditor.EditorGUILayout.Foldout(element.isExpanded, $"Item {i + 1}", true);
             if (GUILayout.Button("X", GUILayout.Width(20)))
             {
                 listProp.DeleteArrayElementAtIndex(i);
-                EditorGUILayout.EndHorizontal();
-                EditorGUILayout.EndVertical();
-                return;
+                UnityEditor.EditorGUILayout.EndHorizontal();
+                UnityEditor.EditorGUILayout.EndVertical();
+                return; // indices changed; bail out and redraw next frame
             }
-            EditorGUILayout.EndHorizontal();
+            UnityEditor.EditorGUILayout.EndHorizontal();
 
             if (element.isExpanded)
             {
                 DrawEquipableItem(element);
             }
 
-            EditorGUILayout.EndVertical();
+            UnityEditor.EditorGUILayout.EndVertical();
         }
 
         if (GUILayout.Button("Add New Item"))
@@ -1005,7 +1449,6 @@ EditorGUILayout.PropertyField(slideCurve, new GUIContent("Slide Curve"));
             int idx = listProp.arraySize;
             listProp.InsertArrayElementAtIndex(idx);
             var el = listProp.GetArrayElementAtIndex(idx);
-            // init melee list with 1 value
             el.FindPropertyRelative("melee_MBCAmount").intValue = 1;
             var dmgList = el.FindPropertyRelative("melee_MBCDamages");
             dmgList.arraySize = 1;
@@ -1013,72 +1456,103 @@ EditorGUILayout.PropertyField(slideCurve, new GUIContent("Slide Curve"));
         }
     }
 
-    void DrawEquipableItem(SerializedProperty el)
+    bool PassesInspectorFilter(UnityEditor.SerializedProperty element)
+{
+    if (_inspectorStyleIndex > 0)
     {
-        // BASIC INFO
-        EditorGUILayout.LabelField("Basic Info", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(el.FindPropertyRelative("itemName"));
-        EditorGUILayout.PropertyField(el.FindPropertyRelative("itemDescription"));
-        EditorGUILayout.PropertyField(el.FindPropertyRelative("category"));
-        EditorGUILayout.PropertyField(el.FindPropertyRelative("rarity"));
-        EditorGUILayout.PropertyField(el.FindPropertyRelative("style"));
-
-        // UI DISPLAY
-        EditorGUILayout.Space(4);
-        EditorGUILayout.LabelField("UI Display", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(el.FindPropertyRelative("itemIcon"));
-
-        // ITEM PREFAB
-        EditorGUILayout.Space(4);
-        EditorGUILayout.LabelField("Item Prefab", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(el.FindPropertyRelative("itemPrefab"));
-
-        // WEAPON STATS (conditional)
-        var category = (EquipmentCategory)el.FindPropertyRelative("category").enumValueIndex;
-        if (category == EquipmentCategory.Weapon)
-        {
-            EditorGUILayout.Space(4);
-            EditorGUILayout.LabelField("Weapon Stats", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(el.FindPropertyRelative("weaponSubtype"));
-
-            var subtype = (WeaponSubtype)el.FindPropertyRelative("weaponSubtype").enumValueIndex;
-            if (subtype == WeaponSubtype.Ranged)
-            {
-                EditorGUILayout.LabelField("Ranged", EditorStyles.miniBoldLabel);
-                EditorGUILayout.PropertyField(el.FindPropertyRelative("ranged_MBCDamage"), new GUIContent("MBC Damage"));
-                EditorGUILayout.PropertyField(el.FindPropertyRelative("ranged_MBCCooldown"), new GUIContent("MBC Cooldown"));
-                EditorGUILayout.PropertyField(el.FindPropertyRelative("ranged_CursorSprite"), new GUIContent("Cursor Sprite"));
-                EditorGUILayout.PropertyField(el.FindPropertyRelative("ranged_XMove"), new GUIContent("X Move"));
-                EditorGUILayout.PropertyField(el.FindPropertyRelative("ranged_ZMove"), new GUIContent("Z Move"));
-            }
-            else
-            {
-                EditorGUILayout.LabelField("Melee", EditorStyles.miniBoldLabel);
-                var amountProp = el.FindPropertyRelative("melee_MBCAmount");
-                EditorGUILayout.PropertyField(amountProp, new GUIContent("MBC Amount"));
-
-                var dmgList = el.FindPropertyRelative("melee_MBCDamages");
-                if (amountProp.intValue < 0) amountProp.intValue = 0;
-                while (dmgList.arraySize < amountProp.intValue) dmgList.InsertArrayElementAtIndex(dmgList.arraySize);
-                while (dmgList.arraySize > amountProp.intValue && dmgList.arraySize > 0) dmgList.DeleteArrayElementAtIndex(dmgList.arraySize - 1);
-
-                for (int i = 0; i < dmgList.arraySize; i++)
-                {
-                    EditorGUILayout.PropertyField(dmgList.GetArrayElementAtIndex(i), new GUIContent($"MBC{i + 1} Damage"));
-                }
-
-                EditorGUILayout.PropertyField(el.FindPropertyRelative("melee_MBCComboCooldown"), new GUIContent("MBC Combo Cooldown"));
-                EditorGUILayout.PropertyField(el.FindPropertyRelative("melee_XMove"), new GUIContent("X Move"));
-                EditorGUILayout.PropertyField(el.FindPropertyRelative("melee_ZMove"), new GUIContent("Z Move"));
-            }
-        }
-
-        // EQUIPMENT BONUSES
-        EditorGUILayout.Space(4);
-        EditorGUILayout.LabelField("Equipment Bonuses", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(el.FindPropertyRelative("healthBonus"));
-        EditorGUILayout.PropertyField(el.FindPropertyRelative("staminaBonus"));
-        EditorGUILayout.PropertyField(el.FindPropertyRelative("speedBonus"));
+        int styleIdx = element.FindPropertyRelative("style").enumValueIndex;
+        if (styleIdx != (_inspectorStyleIndex - 1)) return false;
     }
+
+    if (!string.IsNullOrEmpty(_inspectorSearch))
+    {
+        string display = element.FindPropertyRelative("itemName").stringValue ?? "";
+        string key     = element.FindPropertyRelative("inspectorName").stringValue ?? "";
+        if (display.IndexOf(_inspectorSearch, StringComparison.OrdinalIgnoreCase) < 0 &&
+            key.IndexOf(_inspectorSearch,     StringComparison.OrdinalIgnoreCase) < 0)
+            return false;
+    }
+
+    return true;
+}
+
+    void DrawEquipableItem(UnityEditor.SerializedProperty el)
+{
+    UnityEditor.EditorGUILayout.LabelField("Basic Info", UnityEditor.EditorStyles.boldLabel);
+    UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("itemName"));
+    UnityEditor.EditorGUILayout.PropertyField(
+        el.FindPropertyRelative("inspectorName"),
+        new UnityEngine.GUIContent("Inspector Name (key)")
+    );
+    UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("itemDescription"));
+    UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("category"));
+    UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("rarity"));
+    UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("style"));
+
+    UnityEditor.EditorGUILayout.Space(4);
+    UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("itemIcon"));
+
+    // ---- Weapon-only section (unchanged) ----
+    var category = (EquipmentCategory)el.FindPropertyRelative("category").enumValueIndex;
+    if (category == EquipmentCategory.Weapon)
+    {
+        UnityEditor.EditorGUILayout.Space(4);
+        UnityEditor.EditorGUILayout.LabelField("Weapon Stats", UnityEditor.EditorStyles.boldLabel);
+        UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("weaponSubtype"));
+
+        var subtype = (WeaponSubtype)el.FindPropertyRelative("weaponSubtype").enumValueIndex;
+        if (subtype == WeaponSubtype.Ranged)
+        {
+            UnityEditor.EditorGUILayout.LabelField("Ranged", UnityEditor.EditorStyles.miniBoldLabel);
+            UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("ranged_MBCDamage"),
+                new UnityEngine.GUIContent("MBC Damage"));
+            UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("ranged_MBCCooldown"),
+                new UnityEngine.GUIContent("MBC Cooldown"));
+            UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("ranged_CursorSprite"),
+                new UnityEngine.GUIContent("Cursor Sprite"));
+            UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("ranged_XMove"),
+                new UnityEngine.GUIContent("X Move"));
+            UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("ranged_ZMove"),
+                new UnityEngine.GUIContent("Z Move"));
+        }
+        else // Melee
+        {
+            UnityEditor.EditorGUILayout.LabelField("Melee", UnityEditor.EditorStyles.miniBoldLabel);
+            var amountProp = el.FindPropertyRelative("melee_MBCAmount");
+            UnityEditor.EditorGUILayout.PropertyField(amountProp, new UnityEngine.GUIContent("MBC Amount"));
+
+            var dmgList = el.FindPropertyRelative("melee_MBCDamages");
+            if (amountProp.intValue < 0) amountProp.intValue = 0;
+            while (dmgList.arraySize < amountProp.intValue) dmgList.InsertArrayElementAtIndex(dmgList.arraySize);
+            while (dmgList.arraySize > amountProp.intValue && dmgList.arraySize > 0) dmgList.DeleteArrayElementAtIndex(dmgList.arraySize - 1);
+
+            for (int i = 0; i < dmgList.arraySize; i++)
+            {
+                UnityEditor.EditorGUILayout.PropertyField(
+                    dmgList.GetArrayElementAtIndex(i),
+                    new UnityEngine.GUIContent($"MBC{i + 1} Damage"));
+            }
+
+            UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("melee_MBCComboCooldown"),
+                new UnityEngine.GUIContent("MBC Combo Cooldown"));
+            UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("melee_XMove"),
+                new UnityEngine.GUIContent("X Move"));
+            UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("melee_ZMove"),
+                new UnityEngine.GUIContent("Z Move"));
+        }
+    }
+
+    // ---- Attachments ----
+    UnityEditor.EditorGUILayout.Space(4);
+    var attachmentsProp = el.FindPropertyRelative("attachments");
+    UnityEditor.EditorGUILayout.PropertyField(attachmentsProp, new UnityEngine.GUIContent("Attachments"), true);
+
+    // ---- Bonuses ----
+    UnityEditor.EditorGUILayout.Space(4);
+    UnityEditor.EditorGUILayout.LabelField("Equipment Bonuses", UnityEditor.EditorStyles.boldLabel);
+    UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("healthBonus"));
+    UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("staminaBonus"));
+    UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("speedBonus"));
+}
 }
 #endif
