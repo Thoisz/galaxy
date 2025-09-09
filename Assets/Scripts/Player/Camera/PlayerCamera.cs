@@ -111,6 +111,8 @@ public class PlayerCamera : MonoBehaviour
     private bool isLeftPanning = false;
     private Coroutine _autoAlignRoutine;
 
+    private const float SAME_GRAVITY_DOT = 0.99985f; // cos(1°) ≈ 0.99985
+
     private void Start()
     {
         // Get component references
@@ -302,23 +304,24 @@ public class PlayerCamera : MonoBehaviour
     }
 
     private void UpdateGravityZoneUp()
+{
+    if (gravityBody != null)
     {
-        if (gravityBody != null)
+        if (gravityBody.IsInSpace)
         {
-            if (gravityBody.IsInSpace)
-            {
-                // In space: do NOT update the gravity up vector — keep it frozen
-                return;
-            }
+            // In space: do NOT update the gravity up vector — keep it frozen
+            return;
+        }
 
-            Vector3 newUp = -gravityBody.GetEffectiveGravityDirection().normalized;
-            if (Vector3.Dot(newUp, currentGravityZoneUp) < 0.9999f)
-            {
-                previousGravityZoneUp = currentGravityZoneUp;
-                currentGravityZoneUp = newUp;
-            }
+        Vector3 newUp = -gravityBody.GetEffectiveGravityDirection().normalized;
+        float dot = Vector3.Dot(newUp, currentGravityZoneUp);
+        if (dot < SAME_GRAVITY_DOT) // only treat as change if noticeably different
+        {
+            previousGravityZoneUp = currentGravityZoneUp;
+            currentGravityZoneUp = newUp;
         }
     }
+}
 
     private void HandleInput()
     {
@@ -375,7 +378,8 @@ public class PlayerCamera : MonoBehaviour
         _yawDegrees += mouseDelta.x * panSensitivity * Time.deltaTime;
         _pitchDegrees += mouseDelta.y * panSensitivity * Time.deltaTime;
 
-        bool isInSpace = gravityBody != null && gravityBody.IsInSpace;
+        bool isInSpace = (gravityBody != null && gravityBody.IsInSpace)
+                 || (playerFlight != null && playerFlight.IsFlying);
         if (!isInSpace)
         {
             _pitchDegrees = Mathf.Clamp(_pitchDegrees, MinPitch, MaxPitch);
@@ -570,11 +574,10 @@ private void EndThirdPersonPanning()
         _preTransitionCameraForward = cameraTransform.forward;
 
         // Notify flight system if needed
-        if (isPanning && playerFlight != null && playerFlight.IsFlying())
-            playerFlight.SendMessage("OnCameraPanning", cameraForward, SendMessageOptions.DontRequireReceiver);
-
-        if (playerFlight != null && playerFlight.IsFlying())
-            playerFlight.OnCameraPanning(cameraTransform.forward);
+if (playerFlight != null && playerFlight.IsFlying)
+{
+    playerFlight.OnCameraPanning(cameraTransform.forward);
+}
     }
 
     private void RotateCharacterWithCamera()
@@ -596,65 +599,92 @@ private void EndThirdPersonPanning()
         }
     }
 
-    private Vector3 HandleCameraCollision(Vector3 pivotPos, Vector3 desiredPos)
-    {
-        // Use gravity zone up for collision detection
-        Vector3 zoneUp = currentGravityZoneUp;
-
-        // Cache the distance for efficiency
-        float distance = Vector3.Distance(pivotPos, desiredPos);
-
-        // If we're in first person, skip collision detection
-        if (distance < minZoomDistance + 0.2f)
-        {
-            return desiredPos;
-        }
-
-        // Main ray check
-        if (Physics.Linecast(pivotPos, desiredPos, out RaycastHit hit, collisionMask))
-        {
-            return hit.point + hit.normal * collisionBuffer;
-        }
-
-        // Sphere cast for better collision detection
-        float radius = 0.2f;
-        Vector3 direction = (desiredPos - pivotPos).normalized;
-        if (Physics.SphereCast(pivotPos, radius, direction, out hit, distance, collisionMask))
-        {
-            return hit.point + hit.normal * collisionBuffer;
-        }
-
-        // Additional raycasts for better edge detection - only use if needed
-        if (distance > 5f) // Only do this for longer distances to save performance
-        {
-            // Create orthogonal basis for multi-directional raycasts
-            Vector3 right = Vector3.Cross(direction, zoneUp).normalized;
-            if (right.sqrMagnitude < 0.001f)
-            {
-                right = Vector3.Cross(direction, Vector3.right).normalized;
-                if (right.sqrMagnitude < 0.001f)
-                    right = Vector3.Cross(direction, Vector3.forward).normalized;
-            }
-
-            Vector3 up = Vector3.Cross(right, direction).normalized;
-
-            // Cast rays in a circle around the main ray - but fewer for performance
-            int reducedQuality = Mathf.Min(collisionQuality, 6); // Cap at 6 for performance
-            for (int i = 0; i < reducedQuality; i++)
-            {
-                float angle = (i / (float)reducedQuality) * 2 * Mathf.PI;
-                Vector3 offset = (right * Mathf.Cos(angle) + up * Mathf.Sin(angle)) * radius;
-                Vector3 rayStart = pivotPos + offset;
-
-                if (Physics.Raycast(rayStart, direction, out hit, distance, collisionMask))
-                {
-                    return hit.point + hit.normal * collisionBuffer;
-                }
-            }
-        }
-
+    // PlayerCamera.cs — replace HandleCameraCollision with this filtered version
+private Vector3 HandleCameraCollision(Vector3 pivotPos, Vector3 desiredPos)
+{
+    float distance = Vector3.Distance(pivotPos, desiredPos);
+    if (distance < minZoomDistance + 0.2f)
         return desiredPos;
+
+    Vector3 dir = (desiredPos - pivotPos).normalized;
+
+    // 1) RaycastAll and ignore the player
+    RaycastHit[] lineHits = Physics.RaycastAll(
+        pivotPos, dir, distance, collisionMask, QueryTriggerInteraction.Ignore);
+
+    bool found = false;
+    float bestDist = distance;
+    RaycastHit bestHit = default;
+
+    foreach (var h in lineHits)
+    {
+        if (h.collider == null) continue;
+        if (h.collider.transform != null && h.collider.transform.IsChildOf(target)) continue; // ignore player
+
+        if (h.distance < bestDist)
+        {
+            bestDist = h.distance;
+            bestHit = h;
+            found = true;
+        }
     }
+
+    if (found)
+        return bestHit.point + bestHit.normal * collisionBuffer;
+
+    // 2) SphereCastAll and ignore the player (better edge handling)
+    float radius = 0.2f;
+    RaycastHit[] sphereHits = Physics.SphereCastAll(
+        pivotPos, radius, dir, distance, collisionMask, QueryTriggerInteraction.Ignore);
+
+    found = false;
+    bestDist = distance;
+
+    foreach (var h in sphereHits)
+    {
+        if (h.collider == null) continue;
+        if (h.collider.transform != null && h.collider.transform.IsChildOf(target)) continue; // ignore player
+
+        if (h.distance < bestDist)
+        {
+            bestDist = h.distance;
+            bestHit = h;
+            found = true;
+        }
+    }
+
+    if (found)
+        return bestHit.point + bestHit.normal * collisionBuffer;
+
+    // 3) Extra edge rays (also ignore player)
+    if (distance > 5f)
+    {
+        Vector3 right = Vector3.Cross(dir, currentGravityZoneUp).normalized;
+        if (right.sqrMagnitude < 0.001f)
+        {
+            right = Vector3.Cross(dir, Vector3.right).normalized;
+            if (right.sqrMagnitude < 0.001f)
+                right = Vector3.Cross(dir, Vector3.forward).normalized;
+        }
+        Vector3 up = Vector3.Cross(right, dir).normalized;
+
+        int reducedQuality = Mathf.Min(collisionQuality, 6);
+        for (int i = 0; i < reducedQuality; i++)
+        {
+            float angle = (i / (float)reducedQuality) * 2 * Mathf.PI;
+            Vector3 offset = (right * Mathf.Cos(angle) + up * Mathf.Sin(angle)) * radius;
+            Vector3 rayStart = pivotPos + offset;
+
+            if (Physics.Raycast(rayStart, dir, out RaycastHit hit, distance, collisionMask, QueryTriggerInteraction.Ignore))
+            {
+                if (hit.collider != null && hit.collider.transform.IsChildOf(target)) continue; // ignore player
+                return hit.point + hit.normal * collisionBuffer;
+            }
+        }
+    }
+
+    return desiredPos;
+}
 
     private void UpdateZoomDistanceFromPercentage()
     {
@@ -714,68 +744,60 @@ private void EndThirdPersonPanning()
     }
 
     public void OnGravityTransitionCompleted()
+{
+    if (gravityBody != null)
+        currentGravityZoneUp = -gravityBody.GetEffectiveGravityDirection().normalized;
+
+    Vector3 oldGravityUp = previousGravityZoneUp;
+    Vector3 newGravityUp = currentGravityZoneUp;
+
+    float dot = Vector3.Dot(oldGravityUp.normalized, newGravityUp.normalized);
+
+    // If essentially the same up, do absolutely nothing visual and don't stabilize.
+    if (dot >= SAME_GRAVITY_DOT)
     {
-        if (gravityBody != null)
-        {
-            currentGravityZoneUp = -gravityBody.GetEffectiveGravityDirection().normalized;
-        }
-
-        // Check if this is a significant gravity change (like flipping to opposite gravity)
-        Vector3 oldGravityUp = previousGravityZoneUp;
-        Vector3 newGravityUp = currentGravityZoneUp;
-
-        // Calculate the dot product to see how different the gravity directions are
-        float gravityAlignment = Vector3.Dot(oldGravityUp, newGravityUp);
-        bool isSignificantGravityChange = gravityAlignment < 0.5f; // Any major gravity change (not just opposite)
-
-        Debug.Log($"[Camera] Gravity alignment: {gravityAlignment}, isSignificantChange: {isSignificantGravityChange}");
-
-        if (isSignificantGravityChange)
-        {
-            // For ANY significant gravity change, position camera behind player's back
-            Debug.Log("[Camera] Significant gravity change - positioning camera behind player's back");
-
-            // Get the player's forward direction in the new gravity orientation
-            Vector3 playerForward = Vector3.ProjectOnPlane(playerTransform.forward, newGravityUp).normalized;
-
-            // Calculate base forward for the new gravity orientation
-            Vector3 baseForward = Vector3.ProjectOnPlane(Vector3.forward, newGravityUp).normalized;
-            if (baseForward.sqrMagnitude < 0.0001f)
-            {
-                baseForward = Vector3.ProjectOnPlane(Vector3.right, newGravityUp).normalized;
-            }
-
-            if (baseForward.sqrMagnitude > 0.0001f && playerForward.sqrMagnitude > 0.0001f)
-            {
-                // Calculate yaw to position camera behind player (same as player's forward)
-                Vector3 cameraDirection = playerForward; // Behind the player
-                _yawDegrees = SignedAngle(baseForward, cameraDirection, newGravityUp);
-                Debug.Log($"[Camera] Set yaw to position behind player: {_yawDegrees}");
-            }
-
-            // Set a default pitch to look slightly down at the player
-            _pitchDegrees = -10f; // Slightly looking down
-            _pitchDegrees = Mathf.Clamp(_pitchDegrees, MinPitch, MaxPitch);
-            Debug.Log($"[Camera] Set pitch for behind view: {_pitchDegrees}");
-        }
-        else
-        {
-            // PRESERVE CAMERA'S ORBITAL POSITION for normal gravity transitions
-            PreserveCameraOrbitalPosition(oldGravityUp, newGravityUp);
-        }
-
-        _stabilizingAfterTransition = true;
-        _stabilizationTimer = 0f;
         isChangingGravity = false;
+        _stabilizingAfterTransition = false;
 
-        Debug.Log($"[Camera] Final yaw: {_yawDegrees}, pitch: {_pitchDegrees}");
-
-        // Notify PlayerFlight
         if (playerFlight != null)
-        {
-            playerFlight.OnGravityTransitionCompleted(previousGravityZoneUp, currentGravityZoneUp, 0f);
-        }
+            playerFlight.OnGravityTransitionCompleted(oldGravityUp, newGravityUp, 0f);
+
+        return;
     }
+
+    // Existing logic for real changes:
+    float gravityAlignment = dot;
+    bool isSignificantGravityChange = gravityAlignment < 0.5f;
+
+    if (isSignificantGravityChange)
+    {
+        // Your existing "behind the player" block...
+        Vector3 playerForward = Vector3.ProjectOnPlane(playerTransform.forward, newGravityUp).normalized;
+
+        Vector3 baseForward = Vector3.ProjectOnPlane(Vector3.forward, newGravityUp).normalized;
+        if (baseForward.sqrMagnitude < 0.0001f)
+            baseForward = Vector3.ProjectOnPlane(Vector3.right, newGravityUp).normalized;
+
+        if (baseForward.sqrMagnitude > 0.0001f && playerForward.sqrMagnitude > 0.0001f)
+        {
+            Vector3 cameraDirection = playerForward;
+            _yawDegrees = SignedAngle(baseForward, cameraDirection, newGravityUp);
+        }
+
+        _pitchDegrees = Mathf.Clamp(-10f, MinPitch, MaxPitch);
+    }
+    else
+    {
+        PreserveCameraOrbitalPosition(oldGravityUp, newGravityUp);
+    }
+
+    _stabilizingAfterTransition = true;
+    _stabilizationTimer = 0f;
+    isChangingGravity = false;
+
+    if (playerFlight != null)
+        playerFlight.OnGravityTransitionCompleted(oldGravityUp, newGravityUp, 0f);
+}
 
     private void PreserveCameraOrbitalPosition(Vector3 oldGravityUp, Vector3 newGravityUp)
     {
@@ -886,39 +908,44 @@ private void EndThirdPersonPanning()
     }
 
     public void OnGravityTransitionStarted()
+{
+    Vector3 newUp = currentGravityZoneUp;
+    if (gravityBody != null)
+        newUp = -gravityBody.GetEffectiveGravityDirection().normalized;
+
+    float dot = Vector3.Dot(previousGravityZoneUp.normalized, newUp.normalized);
+
+    // Trivial change? Don't pause input/camera at all.
+    if (dot >= SAME_GRAVITY_DOT)
     {
-        isChangingGravity = true;
-        _preTransitionTime = Time.time;
-
-        // Store the ACTUAL world forward direction the camera was looking
-        _preTransitionWorldForward = cameraTransform.forward;
-        _preTransitionWorldRight = cameraTransform.right;
-        _preTransitionCameraRotation = cameraTransform.rotation;
-        _preTransitionYawDegrees = _yawDegrees;
-
-        // Store gravity directions
-        previousGravityZoneUp = currentGravityZoneUp;
-        if (gravityBody != null)
-        {
-            currentGravityZoneUp = -gravityBody.GetEffectiveGravityDirection().normalized;
-        }
-
-        // Store relative camera position for first-person
-        if (isInFirstPerson)
-        {
-            cameraRelativePosition = target.InverseTransformPoint(cameraTransform.position);
-            cameraRelativeRotation = Quaternion.Inverse(target.rotation) * cameraTransform.rotation;
-        }
-
-        Debug.Log($"[Camera] Storing world forward: {_preTransitionWorldForward}, old up: {previousGravityZoneUp}, new up: {currentGravityZoneUp}");
-        Debug.Log($"[Camera] Current yaw before transition: {_yawDegrees}");
-
-        // Notify PlayerFlight
+        previousGravityZoneUp = currentGravityZoneUp = newUp;
+        // Still tell flight we're "done" so it never locks.
         if (playerFlight != null)
-        {
-            playerFlight.OnGravityTransitionStarted(previousGravityZoneUp, currentGravityZoneUp, 0f);
-        }
+            playerFlight.OnGravityTransitionCompleted(previousGravityZoneUp, currentGravityZoneUp, 0f);
+        return;
     }
+
+    // Real transition
+    isChangingGravity = true;
+    _preTransitionTime = Time.time;
+
+    _preTransitionWorldForward   = cameraTransform.forward;
+    _preTransitionWorldRight     = cameraTransform.right;
+    _preTransitionCameraRotation = cameraTransform.rotation;
+    _preTransitionYawDegrees     = _yawDegrees;
+
+    previousGravityZoneUp = currentGravityZoneUp;
+    currentGravityZoneUp  = newUp;
+
+    if (isInFirstPerson)
+    {
+        cameraRelativePosition = target.InverseTransformPoint(cameraTransform.position);
+        cameraRelativeRotation = Quaternion.Inverse(target.rotation) * cameraTransform.rotation;
+    }
+
+    if (playerFlight != null)
+        playerFlight.OnGravityTransitionStarted(previousGravityZoneUp, currentGravityZoneUp, 0f);
+}
 
     // Calculate signed angle between two vectors on a plane defined by normal
     private float SignedAngle(Vector3 from, Vector3 to, Vector3 normal)

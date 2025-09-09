@@ -274,34 +274,31 @@ public class GravityMeshBox : GravityArea
         Debug.Log($"Delayed gravity exit applied for mesh box {name}");
     }
     
-    private void NotifyCameraOfTransition(Transform playerTransform)
+    // GravityMeshBox.cs — replace NotifyCameraOfTransition
+private void NotifyCameraOfTransition(Transform playerTransform)
+{
+    var gravityBody = playerTransform.GetComponent<GravityBody>();
+    var playerFlight = playerTransform.GetComponent<PlayerFlight>();
+    var playerCamera = playerTransform.GetComponentInChildren<PlayerCamera>();
+    if (gravityBody == null) return;
+
+    const float SAME_GRAVITY_DOT = 0.99985f; // ~1°
+    Vector3 oldUp = -gravityBody.GetEffectiveGravityDirection().normalized;
+    Vector3 newUp = -GetGravityDirection(gravityBody).normalized;
+    bool same = Vector3.Dot(oldUp, newUp) >= SAME_GRAVITY_DOT;
+
+    // Always register area (priority bookkeeping)
+    gravityBody.AddGravityArea(this);
+
+    if (same)
     {
-        // Find player camera
-        PlayerCamera playerCamera = playerTransform.GetComponentInChildren<PlayerCamera>();
-        if (playerCamera == null)
-        {
-            playerCamera = FindObjectOfType<PlayerCamera>();
-        }
-
-        if (playerCamera != null)
-        {
-            // Notify camera that a gravity transition is starting
-            playerCamera.OnGravityTransitionStarted();
-
-            // Directly notify PlayerFlight with parameters
-            PlayerFlight playerFlight = playerTransform.GetComponent<PlayerFlight>();
-            if (playerFlight != null)
-            {
-                Vector3 gravityDirection = GetGravityDirectionFromFace();
-                Vector3 oldDirection = playerTransform.up;
-                Vector3 newDirection = -gravityDirection.normalized;
-                float duration = 0.5f;
-
-                // Direct method call instead of SendMessage
-                playerFlight.OnGravityTransitionStarted(oldDirection, newDirection, duration);
-            }
-        }
+        // Don’t start transitions for “same up”
+        return;
     }
+
+    if (playerCamera != null) playerCamera.OnGravityTransitionStarted();
+    if (playerFlight != null) playerFlight.OnGravityTransitionStarted(oldUp, newUp, 0f);
+}
     
     // Visualize the gravity area in the editor
     private void OnDrawGizmos()

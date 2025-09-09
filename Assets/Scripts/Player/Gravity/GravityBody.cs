@@ -108,6 +108,8 @@ public Vector3 GetPlayerWorldForward()
     private Vector3 _lastPlanetUpVector = Vector3.up;
     private Vector3 _upVector = Vector3.up;
 
+    private const float SAME_GRAVITY_DOT = 0.99985f; // ~1°
+
     private void Start()
     {
         _rigidbody = GetComponent<Rigidbody>();
@@ -277,7 +279,7 @@ public Vector3 GetPlayerWorldForward()
                 Vector3 currentDirection = GravityDirection.normalized;
                 Vector3 previousDirection = _lastGravityDirection.normalized;
 
-                bool gravityChanged = (Vector3.Dot(currentDirection, previousDirection) < 0.999f);
+                bool gravityChanged = (Vector3.Dot(currentDirection, previousDirection) < SAME_GRAVITY_DOT);
 
                 if (gravityChanged || _forceInstantRotation)
                 {
@@ -311,7 +313,7 @@ public Vector3 GetPlayerWorldForward()
                 Vector3 currentDirection = GravityDirection.normalized;
                 Vector3 previousDirection = _lastGravityDirection.normalized;
 
-                bool gravityChanged = (Vector3.Dot(currentDirection, previousDirection) < 0.999f);
+                bool gravityChanged = (Vector3.Dot(currentDirection, previousDirection) < SAME_GRAVITY_DOT);
 
                 if (gravityChanged)
                 {
@@ -459,7 +461,7 @@ public Vector3 GetPlayerWorldForward()
     }
 
     // Avoid transition if gravity direction didn't change significantly
-    if (Vector3.Dot(_lastGravityDirection.normalized, comparisonDirection.normalized) > 0.999f)
+    if (Vector3.Dot(_lastGravityDirection.normalized, comparisonDirection.normalized) > SAME_GRAVITY_DOT)
     {
         Debug.Log("Skipping rotation alignment: entering space or gravity unchanged");
         return;

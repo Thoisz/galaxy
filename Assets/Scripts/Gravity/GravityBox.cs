@@ -233,43 +233,32 @@ public class GravityBox : GravityArea
         Debug.Log($"Delayed gravity exit applied for {name}");
     }
     
-    private void NotifyCameraOfTransition(Transform playerTransform)
+    // GravityBox.cs — replace NotifyCameraOfTransition
+private void NotifyCameraOfTransition(Transform playerTransform)
+{
+    var gravityBody = playerTransform.GetComponent<GravityBody>();
+    var playerFlight = playerTransform.GetComponent<PlayerFlight>();
+    var playerCamera = playerTransform.GetComponentInChildren<PlayerCamera>();
+    if (gravityBody == null) return;
+
+    const float SAME_GRAVITY_DOT = 0.99985f; // ~1°
+    Vector3 oldUp = -gravityBody.GetEffectiveGravityDirection().normalized;
+    Vector3 newUp = -GetGravityDirection(gravityBody).normalized;
+    bool same = Vector3.Dot(oldUp, newUp) >= SAME_GRAVITY_DOT;
+
+    // Always register area (priority bookkeeping)
+    gravityBody.AddGravityArea(this);
+
+    if (same)
     {
-        GravityBody gravityBody = playerTransform.GetComponent<GravityBody>();
-        PlayerFlight playerFlight = playerTransform.GetComponent<PlayerFlight>();
-        PlayerCamera playerCamera = playerTransform.GetComponentInChildren<PlayerCamera>();
-
-        if (gravityBody == null || playerFlight == null) return;
-
-        // Get gravity directions
-        Vector3 currentDirection = -gravityBody.GravityDirection;
-        Vector3 newDirection = -GetGravityDirection(gravityBody);
-
-        bool isSameGravity = AreDirectionsSimilar(currentDirection, newDirection);
-
-        float transitionDuration = 0.5f;
-
-        // Always update the gravity body — needed for force and registration
-        gravityBody.AddGravityArea(this);
-
-        // Only notify flight & camera if direction really changed
-        if (!isSameGravity)
-        {
-            if (playerCamera != null)
-            {
-                playerCamera.OnGravityTransitionStarted();
-            }
-
-            playerFlight.OnGravityTransitionStarted(currentDirection, newDirection, transitionDuration);
-        }
-        else
-        {
-            // Even if we skip transition, align orientation instantly
-            gravityBody.ForceAlignWithGravity(true);
-        }
-
-        Debug.Log($"[GravityBox] NotifyCameraOfTransition: isSameGravity = {isSameGravity}");
+        // No visual/input transition; don’t spam Started
+        return;
     }
+
+    // Real change → inform camera/flight
+    if (playerCamera != null) playerCamera.OnGravityTransitionStarted();
+    if (playerFlight != null) playerFlight.OnGravityTransitionStarted(oldUp, newUp, 0f);
+}
 
     private bool AreDirectionsSimilar(Vector3 a, Vector3 b, float threshold = 0.01f)
     {
