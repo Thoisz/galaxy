@@ -537,16 +537,30 @@ if (_isInGravityTransition)
     Vector3 camBaseFwd, camRightOnPlane, flatCamFwdForMove;
     float camVertForMove, horizFactorForMove;
 
-    // ── Pitch assist (Space/Shift)
-    // CHANGED: allow pitch with ANY movement direction (was excluding strafe/back)
+    // ───────────────────── In-flight pitch assist (Space / Shift) ─────────────────────
+    // Allow pitch with ANY movement direction (W/A/S/D). Gate by camera half:
+    //  - Space (nose up) only when camera pitched above horizon
+    //  - Shift (nose down) only when camera pitched below horizon
     bool canApplyPitch = hasInput;
-    if (canApplyPitch && Input.GetKey(_idleAscendKey)) _assistAscHoldTimer += Time.fixedDeltaTime; else _assistAscHoldTimer = 0f;
-    if (canApplyPitch && Input.GetKey(_idleDescendKey)) _assistDescHoldTimer += Time.fixedDeltaTime; else _assistDescHoldTimer = 0f;
+
+    // Current camera pitch relative to the flight-up ( + = looking up,  - = looking down )
+    Vector3 camFwdNoAssist = _cameraTransform.forward;
+    Vector3 flatNoAssist   = Vector3.ProjectOnPlane(camFwdNoAssist, _flightUp).normalized;
+    float camPitchDegForGate = Vector3.SignedAngle(flatNoAssist, camFwdNoAssist, Vector3.Cross(flatNoAssist, _flightUp));
+
+    const float HALF_DEADZONE_DEG = 0.15f; // small cushion around horizon to prevent flicker
+    bool allowAscendAssist  = canApplyPitch && (camPitchDegForGate >  HALF_DEADZONE_DEG);
+    bool allowDescendAssist = canApplyPitch && (camPitchDegForGate < -HALF_DEADZONE_DEG);
+
+    // Timers only advance when in the correct half
+    if (allowAscendAssist  && Input.GetKey(_idleAscendKey)) _assistAscHoldTimer  += Time.fixedDeltaTime; else _assistAscHoldTimer  = 0f;
+    if (allowDescendAssist && Input.GetKey(_idleDescendKey)) _assistDescHoldTimer += Time.fixedDeltaTime; else _assistDescHoldTimer = 0f;
 
     float desiredAssist = 0f;
-    if (canApplyPitch && _assistAscHoldTimer  >= _pitchAssistHoldDelay) desiredAssist += (-_pitchAssistDegrees) * inputMag; // Space → nose up
-    if (canApplyPitch && _assistDescHoldTimer >= _pitchAssistHoldDelay) desiredAssist += (+_pitchAssistDegrees) * inputMag; // Shift → nose down
+    if (allowAscendAssist  && _assistAscHoldTimer  >= _pitchAssistHoldDelay) desiredAssist += (-_pitchAssistDegrees) * inputMag; // Space → nose up
+    if (allowDescendAssist && _assistDescHoldTimer >= _pitchAssistHoldDelay) desiredAssist += (+_pitchAssistDegrees) * inputMag; // Shift → nose down
 
+    // Clamp assist so we never push past the camera pitch limit window
     float assistMin, assistMax;
     if (ignoreCameraForControls)
     {
@@ -555,12 +569,12 @@ if (_isInGravityTransition)
     }
     else
     {
-        Vector3 camNoAssist = _cameraTransform.forward;
-        Vector3 flatNoAssist = Vector3.ProjectOnPlane(camNoAssist, _flightUp).normalized;
-        float camPitchNoAssist = -Vector3.SignedAngle(flatNoAssist, camNoAssist, Vector3.Cross(flatNoAssist, _flightUp));
+        // NOTE: this uses the same sign convention this method already used for limit calc
+        Vector3 flatForLimit = flatNoAssist;
+        float camPitchNoAssist_ForLimit = -Vector3.SignedAngle(flatForLimit, camFwdNoAssist, Vector3.Cross(flatForLimit, _flightUp));
         float limit = _pitchAssistCamLimit;
-        assistMin = -limit - camPitchNoAssist;
-        assistMax =  limit - camPitchNoAssist;
+        assistMin = -limit - camPitchNoAssist_ForLimit;
+        assistMax =  limit - camPitchNoAssist_ForLimit;
     }
 
     desiredAssist = Mathf.Clamp(desiredAssist, assistMin, assistMax);
@@ -583,7 +597,6 @@ if (_isInGravityTransition)
         float horizFactorFrozen     = Mathf.Sqrt(Mathf.Clamp01(1f - camVertFrozen * camVertFrozen));
 
         Vector3 horiz    = flatCamFwdForMove * (v * horizFactorFrozen) + camRightOnPlane * h;
-        // CHANGED: allow vertical base even while strafing/back
         Vector3 vertBase = canApplyPitch ? (_flightUp * (camVertFrozen * inputMag)) : Vector3.zero;
 
         Vector3 desiredMoveDir = horiz + vertBase;
@@ -624,7 +637,6 @@ if (_isInGravityTransition)
         SetAnimatorParams(true, _rb.velocity.magnitude);
 
         // Orientation (stay on frozen yaw, return pitch when no input)
-        // CHANGED: always apply assist while moving (no strafe/back gating)
         float maskedPitch = canApplyPitch ? (_lmbFrozenPitchDeg + _activePitchAssistDeg) : _lmbFrozenPitchDeg;
 
         Vector3 desiredYawFwd;
@@ -684,7 +696,6 @@ if (_isInGravityTransition)
 
     // Movement build
     Vector3 horizLive = flatCamFwdForMove * (v * horizFactorForMove) + camRightOnPlane * h;
-    // CHANGED: allow vertical base even while strafing/back
     Vector3 vertBaseLive = _flightUp * (camVertForMove * (hasInput ? inputMag : 0f));
 
     Vector3 desiredMoveDirLive = horizLive + vertBaseLive;
@@ -738,10 +749,8 @@ if (_isInGravityTransition)
     }
 
     // === ORIENTATION (default behavior) ===
-    // CHANGED: always compute pitch from assisted forward (no strafe/back gating)
     float camPitchForMove =
         -Vector3.SignedAngle(flatCamFwdForMove, camFwdForMoveLive, Vector3.Cross(flatCamFwdForMove, _flightUp));
-
     float maskedPitchLive = hasInput ? camPitchForMove : 0f;
 
     Vector3 desiredYawFwdLive;
