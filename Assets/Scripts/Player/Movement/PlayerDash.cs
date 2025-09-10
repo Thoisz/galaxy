@@ -226,12 +226,6 @@ private void UpdateMomentumGracePeriod()
     _upVector = _gravityBody != null ? -_gravityBody.GravityDirection.normalized : Vector3.up;
     _gravityDirection = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
     
-    // Store current altitude for airborne dashes
-    if (!_dashStartedGrounded)
-    {
-        _dashStartAltitude = Vector3.Dot(transform.position, -_gravityDirection);
-    }
-    
     // Store original state
     if (_rigidbody != null)
     {
@@ -240,16 +234,15 @@ private void UpdateMomentumGracePeriod()
         _originalConstraints = _rigidbody.constraints;
     }
     
-    // Calculate dash direction
+    // Calculate dash direction (now LMB-panning aware)
     CalculateDashDirection();
     
     // Initialize smooth direction tracking
     _currentDashDirection = _dashDirectionFlat;
     _lastAppliedDirection = _dashDirectionFlat;
     
-    // UPDATED: Calculate dash velocity accounting for slowdown phase
-    // We still want to cover the same distance in the same time, but with variable speed
-    _dashSpeed = _dashDistance / _dashDuration; // Keep original speed calculation
+    // UPDATED: speed setup
+    _dashSpeed = _dashDistance / _dashDuration;
     _dashVelocity = _dashDirectionFlat * _dashSpeed;
     
     // Set start time
@@ -263,35 +256,26 @@ private void UpdateMomentumGracePeriod()
     ApplyDashVelocity();
     
     // Effects
-    if (_trailRenderer != null)
-    {
-        _trailRenderer.emitting = true;
-    }
+    if (_trailRenderer != null) _trailRenderer.emitting = true;
+    if (_dashVFXPrefab != null) Instantiate(_dashVFXPrefab, transform.position, Quaternion.identity);
+    if (_dashSound != null) AudioSource.PlayClipAtPoint(_dashSound, transform.position);
     
-    if (_dashVFXPrefab != null)
-    {
-        Instantiate(_dashVFXPrefab, transform.position, Quaternion.identity);
-    }
-    
-    if (_dashSound != null)
-    {
-        AudioSource.PlayClipAtPoint(_dashSound, transform.position);
-    }
-    
-    // Animation - ADDED: Set both trigger and boolean
+    // Animation - keep both trigger and boolean
     if (_animator != null)
     {
         _animator.SetInteger("dashSide", _dashSide);
-        _animator.SetTrigger("dash"); // Keep existing trigger
-        _animator.SetBool("isDashing", true); // Add new boolean
+        _animator.SetTrigger("dash");
+        _animator.SetBool("isDashing", true);
         _animator.SetBool("dashEnd", false);
         _dashSide = (_dashSide == 0) ? 1 : 0;
     }
-    
-    // Camera panning - Enable if right mouse is pressed (regardless of input direction)
-    if (_playerCamera != null && _isRightMousePressed)
+
+    // Keep cursor hidden/locked during dash if RMB or LMB panning is active
+    bool rightDown   = Input.GetMouseButton(1);
+    bool leftPanDown = (_playerCamera != null && _playerCamera.IsLeftPanningActive());
+    if (_playerCamera != null && (rightDown || leftPanDown))
     {
-        _playerCamera.SetPanningActive(true, true);
+        _playerCamera.SetPanningActive(true, true); // force lock+hide
     }
 }
 
@@ -299,47 +283,60 @@ private void UpdateMomentumGracePeriod()
 {
     float h = Input.GetAxisRaw("Horizontal");
     float v = Input.GetAxisRaw("Vertical");
-    
-    // Get camera directions projected on the plane
-    Vector3 cameraForward = Vector3.ProjectOnPlane(_cameraTransform.forward, _upVector).normalized;
-    Vector3 cameraRight = Vector3.ProjectOnPlane(_cameraTransform.right, _upVector).normalized;
-    
-    // Check if there's any input
+
+    Vector3 up = _upVector; // already set in StartDash()
+    bool leftPanActive = (_playerCamera != null && _playerCamera.IsLeftPanningActive());
+
+    if (leftPanActive)
+    {
+        // LMB free-look: dash straight along the PLAYER'S forward, not camera
+        Vector3 playerForwardFlat = Vector3.ProjectOnPlane(transform.forward, up).normalized;
+        if (playerForwardFlat.sqrMagnitude < 0.0001f)
+            playerForwardFlat = Vector3.ProjectOnPlane(Vector3.forward, up).normalized;
+
+        _dashDirection      = playerForwardFlat;
+        _dashDirectionFlat  = playerForwardFlat;
+        _hasInputDirection  = false;               // not camera/input-driven
+        _lastInputDirection = _dashDirection;
+
+        // Safety: ensure no gravity-axis contamination
+        float gComp = Vector3.Dot(_dashDirectionFlat, _gravityDirection);
+        if (Mathf.Abs(gComp) > 0.001f)
+            _dashDirectionFlat = (_dashDirectionFlat - _gravityDirection * gComp).normalized;
+
+        return;
+    }
+
+    // ── Default behavior (camera-relative if input, else camera forward)
+    Vector3 cameraForward = Vector3.ProjectOnPlane(_cameraTransform.forward, up).normalized;
+    Vector3 cameraRight   = Vector3.ProjectOnPlane(_cameraTransform.right,   up).normalized;
+
     bool hasInput = Mathf.Abs(h) > 0.1f || Mathf.Abs(v) > 0.1f;
-    
     if (hasInput)
     {
-        // Any input direction - calculate direction relative to camera
         Vector3 inputDir = new Vector3(h, 0, v).normalized;
         _dashDirection = (cameraForward * inputDir.z + cameraRight * inputDir.x).normalized;
-        _hasInputDirection = true;
+        _hasInputDirection  = true;
         _lastInputDirection = _dashDirection;
     }
     else
     {
-        // No input - dash in camera direction
-        _dashDirection = cameraForward;
-        _hasInputDirection = false;
+        _dashDirection      = cameraForward;
+        _hasInputDirection  = false;
         _lastInputDirection = _dashDirection;
     }
-    
-    // Safety check
-    if (_dashDirection.magnitude < 0.1f)
-    {
+
+    if (_dashDirection.sqrMagnitude < 0.01f)
         _dashDirection = transform.forward;
-    }
-    
-    // Calculate flattened direction - project onto the gravity plane
-    _dashDirectionFlat = Vector3.ProjectOnPlane(_dashDirection, _upVector).normalized;
-    
-    // Ensure the direction has ZERO component along gravity direction
+
+    _dashDirectionFlat = Vector3.ProjectOnPlane(_dashDirection, up).normalized;
+
     float gravityComponent = Vector3.Dot(_dashDirectionFlat, _gravityDirection);
     if (Mathf.Abs(gravityComponent) > 0.001f)
-    {
-        // Remove any gravity-direction component
-        _dashDirectionFlat = _dashDirectionFlat - (_gravityDirection * gravityComponent);
-        _dashDirectionFlat = _dashDirectionFlat.normalized;
-    }
+        _dashDirectionFlat = (_dashDirectionFlat - (_gravityDirection * gravityComponent)).normalized;
+
+    if (_dashDirectionFlat.sqrMagnitude < 0.0001f)
+        _dashDirectionFlat = Vector3.ProjectOnPlane(transform.forward, up).normalized;
 }
 
     // Helper method to get current up vector relative to gravity
@@ -351,6 +348,27 @@ private void UpdateMomentumGracePeriod()
         }
         return Vector3.up; // Fallback to world up
     }
+
+    // Returns the direction the player is actually running (flattened),
+// falling back to the player’s forward if there’s no input.
+private Vector3 GetRunForwardOnPlane(Vector3 up)
+{
+    Vector3 dir = Vector3.zero;
+
+    if (_playerMovement != null)
+    {
+        Vector3 moveDir = _playerMovement.GetMoveDirection(); // already world-space & camera-relative
+        if (moveDir.sqrMagnitude > 0.0001f)
+            dir = moveDir.normalized;
+    }
+
+    if (dir.sqrMagnitude < 0.0001f)
+        dir = transform.forward;
+
+    // flatten to gravity plane
+    dir = Vector3.ProjectOnPlane(dir, up).normalized;
+    return dir.sqrMagnitude > 0.0001f ? dir : Vector3.ProjectOnPlane(transform.forward, up).normalized;
+}
 
     private void UpdateDash()
 {
@@ -628,94 +646,90 @@ private void BufferDash()
 
     private void UpdateDashDirection()
 {
+    // Hard lock while LMB free-look is active
+    if (_playerCamera != null && _playerCamera.IsLeftPanningActive())
+    {
+        Vector3 up = _upVector;
+        Vector3 runFwd = GetRunForwardOnPlane(up);
+
+        _dashDirection        = runFwd;
+        _dashDirectionFlat    = runFwd;
+        _currentDashDirection = _dashDirectionFlat;
+
+        // Apply immediately, ignore camera
+        if (_hasJumpedDuringDash) ApplyDashVelocityForCameraPanning();
+        else                      ApplyDashVelocity();
+
+        _lastAppliedDirection = _currentDashDirection;
+
+        // Face dash direction now
+        _targetRotation = Quaternion.LookRotation(_currentDashDirection, up);
+        transform.rotation = _targetRotation;
+        return;
+    }
+
+    // ── Normal path (RMB + camera/input as before)
     float h = Input.GetAxisRaw("Horizontal");
     float v = Input.GetAxisRaw("Vertical");
     bool hasCurrentInput = Mathf.Abs(h) > 0.1f || Mathf.Abs(v) > 0.1f;
-    
-    // Check if we should be syncing with camera
-    bool shouldSync = _isRightMousePressed && _playerCamera != null && _playerCamera.IsPanningActive() && _hasInputDirection;
-    
-    if (shouldSync)
-    {
-        // When syncing with camera, direction is handled in UpdateDash()
-        // Don't override it here to maintain smooth camera following
-        return;
-    }
-    
-    // FIXED: Handle input changes even when jumped during dash
+
+    bool shouldSync = _isRightMousePressed
+                   && _playerCamera != null
+                   && _playerCamera.IsPanningActive()
+                   && _hasInputDirection;
+
+    if (shouldSync) return; // RMB sync handled in UpdateDash()
+
     if (hasCurrentInput)
     {
         Vector3 cameraForward = Vector3.ProjectOnPlane(_cameraTransform.forward, _upVector).normalized;
-        Vector3 cameraRight = Vector3.ProjectOnPlane(_cameraTransform.right, _upVector).normalized;
-        
+        Vector3 cameraRight   = Vector3.ProjectOnPlane(_cameraTransform.right,   _upVector).normalized;
+
         Vector3 inputDir = new Vector3(h, 0, v).normalized;
         Vector3 newDirection = (cameraForward * inputDir.z + cameraRight * inputDir.x).normalized;
-        
+
         if (newDirection.sqrMagnitude > 0.01f)
         {
-            _dashDirection = newDirection;
-            _dashDirectionFlat = Vector3.ProjectOnPlane(_dashDirection, _upVector).normalized;
-            _hasInputDirection = true;
-            _lastInputDirection = newDirection;
-            
-            // FIXED: Update current dash direction immediately
+            _dashDirection       = newDirection;
+            _dashDirectionFlat   = Vector3.ProjectOnPlane(_dashDirection, _upVector).normalized;
+            _hasInputDirection   = true;
+            _lastInputDirection  = newDirection;
+
             _currentDashDirection = _dashDirectionFlat;
-            
-            // FIXED: Apply new direction immediately, even when jumped during dash
-            if (_hasJumpedDuringDash)
-            {
-                // When jumped during dash, apply direction change with special method
-                ApplyDashVelocityForCameraPanning();
-            }
-            else
-            {
-                // Normal dash direction change
-                ApplyDashVelocity();
-            }
-            
+            if (_hasJumpedDuringDash) ApplyDashVelocityForCameraPanning();
+            else                      ApplyDashVelocity();
+
             _lastAppliedDirection = _currentDashDirection;
-            
-            // Enable camera panning if right mouse is pressed
+
             if (_playerCamera != null && _isRightMousePressed)
-            {
                 _playerCamera.SetPanningActive(true, true);
-            }
             return;
         }
     }
     else
     {
-        // NO INPUT: This is the key condition - stop camera sync when input is released
         if (_hasInputDirection)
         {
-            // Input was just released - disable camera sync but keep last direction
             _hasInputDirection = false;
-            _dashDirection = _lastInputDirection;
+            _dashDirection     = _lastInputDirection;
             _dashDirectionFlat = Vector3.ProjectOnPlane(_dashDirection, _upVector).normalized;
-            
-            // Disable camera panning since no input
+
             if (_playerCamera != null)
-            {
                 _playerCamera.SetPanningActive(false, true);
-            }
-            
             return;
         }
     }
-    
-    // Standstill case - only if we never had input direction
+
+    // Standstill + RMB steer unchanged…
     if (_isRightMousePressed && !_hasInputDirection)
     {
         if (_playerCamera != null && !_playerCamera.IsPanningActive())
-        {
             _playerCamera.SetPanningActive(true);
-        }
-        
+
         Vector3 newDirection = Vector3.ProjectOnPlane(_cameraTransform.forward, _upVector).normalized;
-        
         if (newDirection.sqrMagnitude > 0.01f)
         {
-            _dashDirection = newDirection;
+            _dashDirection     = newDirection;
             _dashDirectionFlat = newDirection;
         }
     }
