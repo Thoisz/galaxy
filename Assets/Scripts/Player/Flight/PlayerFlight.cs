@@ -454,7 +454,6 @@ if (_isInGravityTransition)
     const float EPS = 0.01f;
     bool pureStrafe    = Mathf.Abs(h) > EPS && Mathf.Abs(v) < EPS;      // A or D only
     bool backwardInput = v < -EPS;                                      // any backward
-    bool straightOnly  = (Mathf.Abs(h) < EPS) && (Mathf.Abs(v) > EPS);  // W or S only (for super)
 
     // ── Mouse state (read in FixedUpdate to avoid Update/FixedUpdate race)
     var mouse = UnityEngine.InputSystem.Mouse.current;
@@ -466,33 +465,27 @@ if (_isInGravityTransition)
     // LMB-only free-look (not while RMB also pressed, not over UI)
     bool leftPanDesiredNow = lmb && !rmb && !overUi;
 
-    // ───────────────────────── BOTH-BUTTON AUTORUN/STEER ─────────────────────────
-    // When both mouse buttons are down: treat as "hold W" and steer by the camera.
-    // Also cancel any LMB freelook ignore so camera instantly drives movement & yaw.
+    // ───────────────── BOTH-BUTTON AUTORUN/STEER ─────────────────
     bool bothMouse = lmb && rmb;
     if (bothMouse)
     {
-        // Override "movement input" to be straight forward at full stick
-        h = 0f;
-        v = 1f;
+        // Treat as “W held fully forward” and cancel LMB freelook ignore.
+        h = 0f; v = 1f;
         hasInput = true;
         inputMag = 1f;
         pureStrafe = false;
         backwardInput = false;
-        straightOnly = true;
 
-        // Ensure we are not ignoring the camera due to a previous LMB snapshot
         _leftPanLockActive = false;
         _waitingLmbRealign = false;
         _wasLeftPanActive  = false;
     }
 
-    // ── Edge: LMB started → freeze a stable basis and the current pitch (so player never spins)
+    // ── LMB edge handling (freeze basis & pitch while LMB freelook)
     if (leftPanDesiredNow && !_wasLeftPanActive)
     {
         _leftPanLockActive = true;
 
-        // Freeze yaw-forward on the flight plane
         _lmbFrozenFwd = Vector3.ProjectOnPlane(
             _lastYawForward.sqrMagnitude > 0.0001f
                 ? _lastYawForward
@@ -504,19 +497,15 @@ if (_isInGravityTransition)
 
         _lmbFrozenRight = Vector3.Cross(_flightUp, _lmbFrozenFwd).normalized;
 
-        // Freeze current player pitch (relative to the yaw-forward/right axes)
         Vector3 yawFwdNow = Vector3.ProjectOnPlane(transform.forward, _flightUp).normalized;
         if (yawFwdNow.sqrMagnitude < 0.0001f) yawFwdNow = _lmbFrozenFwd;
         Vector3 rightNow = Vector3.Cross(_flightUp, yawFwdNow).normalized;
         _lmbFrozenPitchDeg = Vector3.SignedAngle(yawFwdNow, transform.forward, rightNow);
     }
 
-    // ── Edge: LMB released → keep ignoring camera until it’s actually behind the player
     if (!leftPanDesiredNow && _wasLeftPanActive)
     {
         _leftPanLockActive = false;
-
-        // Enter "waiting realign" unless RMB is pressed (RMB/both actively steer camera)
         _waitingLmbRealign = !rmb;
 
         if (_playerCamera != null && !rmb)
@@ -524,39 +513,39 @@ if (_isInGravityTransition)
     }
     _wasLeftPanActive = leftPanDesiredNow;
 
-    // If we're waiting for the camera to get behind us, release that lock once close enough.
     if (_waitingLmbRealign)
     {
-        const float REALIGN_RELEASE_ANGLE = 8f; // deg tolerance to consider "behind player"
+        const float REALIGN_RELEASE_ANGLE = 8f;
         Vector3 camFlat = Vector3.ProjectOnPlane(_cameraTransform.forward, _flightUp).normalized;
-        if (camFlat.sqrMagnitude < 0.0001f)
-            camFlat = _lastYawForward;
+        if (camFlat.sqrMagnitude < 0.0001f) camFlat = _lastYawForward;
 
         float misalignment = Vector3.Angle(camFlat, _lastYawForward);
         if (misalignment <= REALIGN_RELEASE_ANGLE)
             _waitingLmbRealign = false;
     }
 
-    // While LMB is down or waiting realign, ignore the live camera for controls.
-    // BUT: if both mouse buttons are down, we already canceled these above.
+    // ── NEW: RMB should never behave like LMB freelook.
+    // If RMB is down, cancel any "ignore live camera" state created by LMB.
+    if (rmb)
+    {
+        _leftPanLockActive = false;
+        _waitingLmbRealign = false;
+    }
+
     bool ignoreCameraForControls = _leftPanLockActive || _waitingLmbRealign;
 
     // ── Control basis & "camera forward for move"
     Vector3 camBaseFwd, camRightOnPlane, flatCamFwdForMove;
     float camVertForMove, horizFactorForMove;
 
-    // ── Pitch assist (Space/Shift) — also allowed during LMB freelook (so vertical flying still works)
+    // ── Pitch assist (Space/Shift)
     bool canApplyPitch = hasInput && !(pureStrafe || backwardInput);
     if (canApplyPitch && Input.GetKey(_idleAscendKey)) _assistAscHoldTimer += Time.fixedDeltaTime; else _assistAscHoldTimer = 0f;
     if (canApplyPitch && Input.GetKey(_idleDescendKey)) _assistDescHoldTimer += Time.fixedDeltaTime; else _assistDescHoldTimer = 0f;
 
-    bool ascendReady  = canApplyPitch && _assistAscHoldTimer  >= _pitchAssistHoldDelay;
-    bool descendReady = canApplyPitch && _assistDescHoldTimer >= _pitchAssistHoldDelay;
-
-    // Target assist (degrees). When ignoring the camera, clamp to +/- _pitchAssistDegrees.
     float desiredAssist = 0f;
-    if (ascendReady)  desiredAssist += (-_pitchAssistDegrees) * inputMag; // Space → nose up
-    if (descendReady) desiredAssist += (+_pitchAssistDegrees) * inputMag; // Shift → nose down
+    if (canApplyPitch && _assistAscHoldTimer  >= _pitchAssistHoldDelay) desiredAssist += (-_pitchAssistDegrees) * inputMag; // Space → nose up
+    if (canApplyPitch && _assistDescHoldTimer >= _pitchAssistHoldDelay) desiredAssist += (+_pitchAssistDegrees) * inputMag; // Shift → nose down
 
     float assistMin, assistMax;
     if (ignoreCameraForControls)
@@ -566,10 +555,9 @@ if (_isInGravityTransition)
     }
     else
     {
-        // respect camera pitch limit when not ignoring camera
-        Vector3 camFwdNoAssist = _cameraTransform.forward;
-        Vector3 flatNoAssist   = Vector3.ProjectOnPlane(camFwdNoAssist, _flightUp).normalized;
-        float camPitchNoAssist = -Vector3.SignedAngle(flatNoAssist, camFwdNoAssist, Vector3.Cross(flatNoAssist, _flightUp));
+        Vector3 camNoAssist = _cameraTransform.forward;
+        Vector3 flatNoAssist = Vector3.ProjectOnPlane(camNoAssist, _flightUp).normalized;
+        float camPitchNoAssist = -Vector3.SignedAngle(flatNoAssist, camNoAssist, Vector3.Cross(flatNoAssist, _flightUp));
         float limit = _pitchAssistCamLimit;
         assistMin = -limit - camPitchNoAssist;
         assistMax =  limit - camPitchNoAssist;
@@ -581,29 +569,27 @@ if (_isInGravityTransition)
         _pitchAssistLerpSpeed * Time.fixedDeltaTime * _pitchAssistDegrees
     );
 
-    // ───────────────────────── IGNORE-CAMERA BRANCH (LMB freelook) ─────────────────────────
+    // ───────────────────────── IGNORE-CAMERA BRANCH (LMB freelook)
     if (ignoreCameraForControls)
     {
-        camBaseFwd      = _lmbFrozenFwd;
-        camRightOnPlane = _lmbFrozenRight;
+        camBaseFwd      = _lmbFrozenFwd;     // assignment (no re-declare)
+        camRightOnPlane = _lmbFrozenRight;   // assignment (no re-declare)
 
         float pitchDeg  = _lmbFrozenPitchDeg + _activePitchAssistDeg;
-        Vector3 camFwdForMove = Quaternion.AngleAxis(pitchDeg, camRightOnPlane) * camBaseFwd;
+        Vector3 camFwdForMoveFrozen = Quaternion.AngleAxis(pitchDeg, camRightOnPlane) * camBaseFwd;
 
-        flatCamFwdForMove   = camBaseFwd;
-        camVertForMove      = Vector3.Dot(camFwdForMove, _flightUp);
-        horizFactorForMove  = Mathf.Sqrt(Mathf.Clamp01(1f - camVertForMove * camVertForMove));
+        flatCamFwdForMove   = camBaseFwd; // assignment (no re-declare)
+        float camVertFrozen         = Vector3.Dot(camFwdForMoveFrozen, _flightUp);
+        float horizFactorFrozen     = Mathf.Sqrt(Mathf.Clamp01(1f - camVertFrozen * camVertFrozen));
 
-        // Movement
-        Vector3 horiz = flatCamFwdForMove * (v * horizFactorForMove) + camRightOnPlane * h;
-        Vector3 vertBase = canApplyPitch ? (_flightUp * (camVertForMove * inputMag)) : Vector3.zero;
+        Vector3 horiz    = flatCamFwdForMove * (v * horizFactorFrozen) + camRightOnPlane * h;
+        Vector3 vertBase = canApplyPitch ? (_flightUp * (camVertFrozen * inputMag)) : Vector3.zero;
 
         Vector3 desiredMoveDir = horiz + vertBase;
         if (desiredMoveDir.sqrMagnitude > 1f) desiredMoveDir.Normalize();
         else if (desiredMoveDir.sqrMagnitude > 0f) desiredMoveDir = desiredMoveDir.normalized;
 
-        if (hasInput && desiredMoveDir.sqrMagnitude > 0.0001f)
-            _lastMoveDir = desiredMoveDir;
+        if (hasInput && desiredMoveDir.sqrMagnitude > 0.0001f) _lastMoveDir = desiredMoveDir;
 
         // Super maintenance
         if (_superActive && (!hasInput || inputMag < _superHoldThreshold || !(Mathf.Abs(h) < EPS && Mathf.Abs(v) > EPS)))
@@ -626,24 +612,23 @@ if (_isInGravityTransition)
         _idleVerticalVel = Mathf.MoveTowards(_idleVerticalVel, targetIdleVert, _idleVerticalAccel * Time.fixedDeltaTime);
 
         // Apply velocity
-        if (hasInput)
-            _rb.velocity = desiredMoveDir * _currentSpeed;
+        if (hasInput) _rb.velocity = desiredMoveDir * _currentSpeed;
         else
         {
             Vector3 horizontal = (_currentSpeed > 0.01f && _lastMoveDir.sqrMagnitude > 0.0001f) ? _lastMoveDir * _currentSpeed : Vector3.zero;
-            Vector3 vertical = _flightUp * _idleVerticalVel;
+            Vector3 vertical   = _flightUp * _idleVerticalVel;
             _rb.velocity = horizontal + vertical;
         }
 
         SetAnimatorParams(true, _rb.velocity.magnitude);
 
-        // Orientation (stay on frozen yaw)
+        // Orientation (stay on frozen yaw, return pitch when no input)
         float maskedPitch = canApplyPitch ? (_lmbFrozenPitchDeg + _activePitchAssistDeg) : _lmbFrozenPitchDeg;
 
         Vector3 desiredYawFwd;
         if (hasInput)
         {
-            Vector3 horizForYaw = flatCamFwdForMove * (v * horizFactorForMove) + camRightOnPlane * h;
+            Vector3 horizForYaw = flatCamFwdForMove * (v * horizFactorFrozen) + camRightOnPlane * h;
             Vector3 yawFromMove = Vector3.ProjectOnPlane(horizForYaw, _flightUp).normalized;
             if (yawFromMove.sqrMagnitude < 0.0001f) yawFromMove = _lastYawForward;
 
@@ -677,45 +662,31 @@ if (_isInGravityTransition)
         return; // end ignore-camera branch
     }
 
-    // ───────────────────────── LIVE-CAMERA BRANCH (camera drives movement) ─────────────────────────
-    Vector3 camFwd = _cameraTransform.forward;
-    Vector3 flatCamFwd = Vector3.ProjectOnPlane(camFwd, _flightUp).normalized;
+    // ───────────────────────── LIVE-CAMERA BRANCH (camera drives movement)
+    Vector3 camForwardLive = _cameraTransform.forward;
+    Vector3 flatCamFwd     = Vector3.ProjectOnPlane(camForwardLive, _flightUp).normalized;
     if (flatCamFwd.sqrMagnitude < 0.0001f)
         flatCamFwd = Vector3.ProjectOnPlane(Vector3.forward, _flightUp).normalized;
 
-    camRightOnPlane = Vector3.Cross(_flightUp, flatCamFwd).normalized;
+    camRightOnPlane = Vector3.Cross(_flightUp, flatCamFwd).normalized; // assignment (no re-declare)
 
-    // Apply assist to camera forward (only when using WASD-style forward; in both-mouse we still allow assist keys)
-    Vector3 camFwdForMoveLive = hasInput
-        ? (Quaternion.AngleAxis(_activePitchAssistDeg, camRightOnPlane) * camFwd)
-        : camFwd;
+    // Build forward used for movement (apply assist only while moving forward/back)
+    Vector3 camFwdForMoveLive =
+        hasInput ? (Quaternion.AngleAxis(_activePitchAssistDeg, camRightOnPlane) * camForwardLive) : camForwardLive;
 
-    flatCamFwdForMove = Vector3.ProjectOnPlane(camFwdForMoveLive, _flightUp).normalized;
-    if (flatCamFwdForMove.sqrMagnitude < 0.0001f)
-        flatCamFwdForMove = flatCamFwd;
+    flatCamFwdForMove = Vector3.ProjectOnPlane(camFwdForMoveLive, _flightUp).normalized; // assignment (no re-declare)
+    if (flatCamFwdForMove.sqrMagnitude < 0.0001f) flatCamFwdForMove = flatCamFwd;
 
-    camVertForMove      = Vector3.Dot(camFwdForMoveLive, _flightUp);
-    horizFactorForMove  = Mathf.Sqrt(Mathf.Clamp01(1f - camVertForMove * camVertForMove));
+    camVertForMove     = Vector3.Dot(camFwdForMoveLive, _flightUp);
+    horizFactorForMove = Mathf.Sqrt(Mathf.Clamp01(1f - camVertForMove * camVertForMove));
 
-    // Movement build (h,v will be (0,1) in both-mouse mode)
+    // Movement build
     Vector3 horizLive = flatCamFwdForMove * (v * horizFactorForMove) + camRightOnPlane * h;
-
     Vector3 vertBaseLive = (!pureStrafe && !backwardInput)
         ? (_flightUp * (camVertForMove * (hasInput ? inputMag : 0f)))
         : Vector3.zero;
 
-    // Extra lift from assist (only when pitch-driven vertical is allowed)
-    float assistSign = 0f;
-    if (!pureStrafe && !backwardInput && canApplyPitch && _assistAscHoldTimer >= _pitchAssistHoldDelay)  assistSign += (Input.GetKey(_idleAscendKey)  ? 1f : 0f);
-    if (!pureStrafe && !backwardInput && canApplyPitch && _assistDescHoldTimer >= _pitchAssistHoldDelay) assistSign -= (Input.GetKey(_idleDescendKey) ? 1f : 0f);
-
-    const float ASSIST_LIFT_SCALE = 0.75f;
-    float assistLiftFrac = Mathf.Sin(Mathf.Abs(_activePitchAssistDeg) * Mathf.Deg2Rad);
-    Vector3 vertAssistLive = (!pureStrafe && !backwardInput)
-        ? (_flightUp * (assistSign * assistLiftFrac * ASSIST_LIFT_SCALE * (hasInput ? inputMag : 0f)))
-        : Vector3.zero;
-
-    Vector3 desiredMoveDirLive = horizLive + vertBaseLive + vertAssistLive;
+    Vector3 desiredMoveDirLive = horizLive + vertBaseLive;
     if (desiredMoveDirLive.sqrMagnitude > 1f) desiredMoveDirLive.Normalize();
     else if (desiredMoveDirLive.sqrMagnitude > 0f) desiredMoveDirLive = desiredMoveDirLive.normalized;
 
@@ -737,24 +708,36 @@ if (_isInGravityTransition)
     if (_superJustActivated) { _currentSpeed = _superSpeed; _superJustActivated = false; }
     else                     { _currentSpeed = Mathf.MoveTowards(_currentSpeed, targetSpeedLive, rateLive * Time.fixedDeltaTime); }
 
-    // Idle ascend/descend (no WASD)
+    // Idle up/down (no WASD)
     bool idleUpDownActiveLive = !hasInput && (_idleAscending || _idleDescending);
     float targetIdleVertLive = idleUpDownActiveLive ? (_idleAscending ? 1f : -1f) * _idleVerticalSpeed : 0f;
     _idleVerticalVel = Mathf.MoveTowards(_idleVerticalVel, targetIdleVertLive, _idleVerticalAccel * Time.fixedDeltaTime);
 
     // Apply velocity
-    if (hasInput)
-        _rb.velocity = desiredMoveDirLive * _currentSpeed;
+    if (hasInput) _rb.velocity = desiredMoveDirLive * _currentSpeed;
     else
     {
         Vector3 horizontal = (_currentSpeed > 0.01f && _lastMoveDir.sqrMagnitude > 0.0001f) ? _lastMoveDir * _currentSpeed : Vector3.zero;
-        Vector3 vertical = _flightUp * _idleVerticalVel;
+        Vector3 vertical   = _flightUp * _idleVerticalVel;
         _rb.velocity = horizontal + vertical;
     }
 
     SetAnimatorParams(true, _rb.velocity.magnitude);
 
-    // Orientation: yaw toward camera horizontal, pitch toward camera pitch (masked by strafe/back flags)
+    // ───────────── RMB + IDLE ⇒ YAW FOLLOW CAMERA (PITCH IGNORED) ─────────────
+    if (rmb && !hasInput)
+    {
+        Vector3 desiredYawFwd = Vector3.Slerp(_lastYawForward, flatCamFwd, Time.fixedDeltaTime * _rotationSpeed).normalized;
+        _lastYawForward = desiredYawFwd;
+
+        Vector3 targetForwardLevel = desiredYawFwd;
+        Quaternion targetRot = Quaternion.LookRotation(targetForwardLevel, _flightUp);
+        Quaternion newRot = Quaternion.Slerp(_rb.rotation, targetRot, Time.fixedDeltaTime * _pitchReturnSpeed);
+        _rb.MoveRotation(newRot);
+        return;
+    }
+
+    // === ORIENTATION (default behavior when not RMB+idle) ===
     float camPitchForMove = (!pureStrafe && !backwardInput)
         ? -Vector3.SignedAngle(flatCamFwdForMove, camFwdForMoveLive, Vector3.Cross(flatCamFwdForMove, _flightUp))
         : 0f;
