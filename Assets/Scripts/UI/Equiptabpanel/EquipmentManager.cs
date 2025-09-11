@@ -448,28 +448,24 @@ bool IsAccessoryEquipped(EquipableItem item) => _equippedAccessory == item;
 void EquipAccessory(EquipableItem item)
 {
     if (item == null) return;
-    if (!PlayerOwns(item)) { Debug.LogWarning($"Tried to equip '{item.itemName}' but it's not owned."); return; }
+    if (!PlayerOwns(item))
+    {
+        Debug.LogWarning($"Tried to equip '{item.itemName}' but it's not owned.");
+        return;
+    }
 
-    // Resolve refs on-demand
+    // Resolve refs on-demand (harmless if nothing is found)
     TryResolvePlayerRefs();
 
     // Unequip previous if different
     if (_equippedAccessory != null && _equippedAccessory != item)
         UnequipAccessory(_equippedAccessory);
 
-    // Apply speed bonus if we have PlayerMovement
-    if (_playerMove != null)
-    {
-        float delta = _playerMove.GetBaseMoveSpeed() * (item.speedBonus / 100f);
-        _playerMove.AddSpeedModifier(delta);
-        _appliedSpeedMods[item] = delta;
-    }
-
-    // Always attach prefabs to bones (doesn't require the Animator itself if bones are assigned)
+    // Only handle visual attachments now
     AttachItemPrefabs(item);
 
     _equippedAccessory = item;
-    Debug.Log($"Equipped accessory '{item.itemName}' (+{item.speedBonus}% speed if PlayerMovement present).");
+    Debug.Log($"Equipped accessory '{item.itemName}'.");
 }
 
 void UnequipAccessory(EquipableItem item)
@@ -478,15 +474,12 @@ void UnequipAccessory(EquipableItem item)
 
     TryResolvePlayerRefs();
 
-    if (_playerMove != null && _appliedSpeedMods.TryGetValue(item, out float delta))
-    {
-        _playerMove.RemoveSpeedModifier(delta);
-        _appliedSpeedMods.Remove(item);
-    }
-
+    // Clear track of equipped accessory
     if (_equippedAccessory == item) _equippedAccessory = null;
 
+    // Remove visuals only
     DetachItemPrefabs(item);
+
     Debug.Log($"Unequipped accessory '{item.itemName}'.");
 }
 
@@ -1301,6 +1294,18 @@ void OnEnable()
     _styleOptions.AddRange(System.Enum.GetNames(typeof(EquipmentStyle)));
 }
 
+private static string GetFoldoutLabel(SerializedProperty element, int index)
+{
+    // Prefer Item Name, then Inspector Name, else fallback
+    string itemName      = element.FindPropertyRelative("itemName")?.stringValue ?? "";
+    string inspectorName = element.FindPropertyRelative("inspectorName")?.stringValue ?? "";
+
+    if (!string.IsNullOrWhiteSpace(itemName))      return itemName;
+    if (!string.IsNullOrWhiteSpace(inspectorName)) return inspectorName;
+
+    return $"Item {index + 1}";
+}
+
     public override void OnInspectorGUI()
 {
     // Safety: if the style list wasn't built (domain reload quirks), rebuild here.
@@ -1415,46 +1420,49 @@ void OnEnable()
         UnityEditor.EditorGUILayout.EndVertical();
     }
 
-    void DrawDatabaseListFiltered(UnityEditor.SerializedProperty listProp)
+    // REPLACE your existing DrawDatabaseListFiltered with this
+void DrawDatabaseListFiltered(SerializedProperty listProp)
+{
+    for (int i = 0; i < listProp.arraySize; i++)
     {
-        for (int i = 0; i < listProp.arraySize; i++)
+        var element = listProp.GetArrayElementAtIndex(i);
+        if (!PassesInspectorFilter(element)) continue;
+
+        EditorGUILayout.BeginVertical("HelpBox");
+        EditorGUILayout.BeginHorizontal();
+
+        string label = GetFoldoutLabel(element, i);
+        element.isExpanded = EditorGUILayout.Foldout(element.isExpanded, label, true);
+
+        if (GUILayout.Button("X", GUILayout.Width(20)))
         {
-            var element = listProp.GetArrayElementAtIndex(i);
-            if (!PassesInspectorFilter(element)) continue;
-
-            var box = new GUIStyle("HelpBox");
-            UnityEditor.EditorGUILayout.BeginVertical(box);
-
-            UnityEditor.EditorGUILayout.BeginHorizontal();
-            element.isExpanded = UnityEditor.EditorGUILayout.Foldout(element.isExpanded, $"Item {i + 1}", true);
-            if (GUILayout.Button("X", GUILayout.Width(20)))
-            {
-                listProp.DeleteArrayElementAtIndex(i);
-                UnityEditor.EditorGUILayout.EndHorizontal();
-                UnityEditor.EditorGUILayout.EndVertical();
-                return; // indices changed; bail out and redraw next frame
-            }
-            UnityEditor.EditorGUILayout.EndHorizontal();
-
-            if (element.isExpanded)
-            {
-                DrawEquipableItem(element);
-            }
-
-            UnityEditor.EditorGUILayout.EndVertical();
+            listProp.DeleteArrayElementAtIndex(i);
+            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.EndVertical();
+            return; // indices changed; redraw next frame
         }
 
-        if (GUILayout.Button("Add New Item"))
+        EditorGUILayout.EndHorizontal();
+
+        if (element.isExpanded)
         {
-            int idx = listProp.arraySize;
-            listProp.InsertArrayElementAtIndex(idx);
-            var el = listProp.GetArrayElementAtIndex(idx);
-            el.FindPropertyRelative("melee_MBCAmount").intValue = 1;
-            var dmgList = el.FindPropertyRelative("melee_MBCDamages");
-            dmgList.arraySize = 1;
-            dmgList.GetArrayElementAtIndex(0).intValue = 0;
+            DrawEquipableItem(element);
         }
+
+        EditorGUILayout.EndVertical();
     }
+
+    if (GUILayout.Button("Add New Item"))
+    {
+        int idx = listProp.arraySize;
+        listProp.InsertArrayElementAtIndex(idx);
+        var el = listProp.GetArrayElementAtIndex(idx);
+        el.FindPropertyRelative("melee_MBCAmount").intValue = 1;
+        var dmgList = el.FindPropertyRelative("melee_MBCDamages");
+        dmgList.arraySize = 1;
+        dmgList.GetArrayElementAtIndex(0).intValue = 0;
+    }
+}
 
     bool PassesInspectorFilter(UnityEditor.SerializedProperty element)
 {
@@ -1478,7 +1486,7 @@ void OnEnable()
 
     void DrawEquipableItem(UnityEditor.SerializedProperty el)
 {
-    UnityEditor.EditorGUILayout.LabelField("Basic Info", UnityEditor.EditorStyles.boldLabel);
+    // Removed the redundant "Basic Info" label
     UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("itemName"));
     UnityEditor.EditorGUILayout.PropertyField(
         el.FindPropertyRelative("inspectorName"),
@@ -1492,7 +1500,7 @@ void OnEnable()
     UnityEditor.EditorGUILayout.Space(4);
     UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("itemIcon"));
 
-    // ---- Weapon-only section (unchanged) ----
+    // ---- Weapon-only section ----
     var category = (EquipmentCategory)el.FindPropertyRelative("category").enumValueIndex;
     if (category == EquipmentCategory.Weapon)
     {
@@ -1542,17 +1550,10 @@ void OnEnable()
         }
     }
 
-    // ---- Attachments ----
+    // ---- Attachments (kept) ----
     UnityEditor.EditorGUILayout.Space(4);
     var attachmentsProp = el.FindPropertyRelative("attachments");
     UnityEditor.EditorGUILayout.PropertyField(attachmentsProp, new UnityEngine.GUIContent("Attachments"), true);
-
-    // ---- Bonuses ----
-    UnityEditor.EditorGUILayout.Space(4);
-    UnityEditor.EditorGUILayout.LabelField("Equipment Bonuses", UnityEditor.EditorStyles.boldLabel);
-    UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("healthBonus"));
-    UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("staminaBonus"));
-    UnityEditor.EditorGUILayout.PropertyField(el.FindPropertyRelative("speedBonus"));
 }
 }
 #endif
