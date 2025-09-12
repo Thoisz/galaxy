@@ -820,25 +820,55 @@ void FilterDatabase()
 }
 
     void SpawnCards()
+{
+    if (itemsScrollViewContent == null) return;
+
+    foreach (var item in _filtered)
     {
-        if (itemsScrollViewContent == null) return;
+        var prefab = GetCardPrefab(item.rarity);
+        if (prefab == null) continue;
 
-        foreach (var item in _filtered)
-        {
-            var prefab = GetCardPrefab(item.rarity);
-            if (prefab == null) continue;
+        var card = Instantiate(prefab, itemsScrollViewContent);
+        _spawnedCards.Add(card);
 
-            var card = Instantiate(prefab, itemsScrollViewContent);
-            _spawnedCards.Add(card);
+        // Fill the visual bits (icon + optional name)
+        TryPopulateCardUI(card, item);
 
-            // If you have a card script, wire it. Otherwise, add a simple button.
-            var btn = card.GetComponentInChildren<Button>();
-            if (btn == null) btn = card.AddComponent<Button>();
-
-            btn.onClick.RemoveAllListeners();
-            btn.onClick.AddListener(() => OnCardClicked(item));
-        }
+        // Ensure there is a clickable button
+        var btn = card.GetComponentInChildren<Button>(true);
+        if (btn == null) btn = card.AddComponent<Button>();
+        btn.onClick.RemoveAllListeners();
+        btn.onClick.AddListener(() => OnCardClicked(item));
     }
+}
+
+void TryPopulateCardUI(GameObject card, EquipableItem item)
+{
+    if (card == null || item == null) return;
+
+    // Heuristic fallback: find an Image that looks like an icon
+    UnityEngine.UI.Image icon = null;
+    var images = card.GetComponentsInChildren<UnityEngine.UI.Image>(true);
+    if (images != null && images.Length > 0)
+    {
+        icon = images.FirstOrDefault(i => i && i.name.IndexOf("icon", StringComparison.OrdinalIgnoreCase) >= 0);
+        if (icon == null) icon = images.FirstOrDefault(i => i && i.gameObject != card);
+        if (icon == null) icon = images[0];
+    }
+
+    if (icon != null)
+    {
+        icon.sprite = item.itemIcon;
+        icon.enabled = (item.itemIcon != null);
+        icon.preserveAspect = true;
+    }
+
+    var nameText = card.GetComponentsInChildren<TMPro.TMP_Text>(true)
+                       .FirstOrDefault(t => t && (t.name.IndexOf("name", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                                  t.name.IndexOf("title", StringComparison.OrdinalIgnoreCase) >= 0));
+    if (nameText != null)
+        nameText.text = string.IsNullOrWhiteSpace(item.itemName) ? item.inspectorName : item.itemName;
+}
 
     void ClearCards()
     {

@@ -57,8 +57,14 @@ public class PlayerFlight : MonoBehaviour
     [SerializeField] private KeyCode _flightDeactivationKey = KeyCode.LeftShift;
     [SerializeField] private float _doubleTapTime = 0.4f;
 
-    [Header("Flight – Script Control")]
-    [SerializeField] private List<MonoBehaviour> _alwaysOnWhileFlying = new List<MonoBehaviour>();
+    [Header("Flight Unlock (Gameplay)")]
+    [SerializeField, Tooltip("When ON, the player can activate flight without any item. Turn OFF for real gameplay and unlock via Jetpack later.")]
+    private bool _flightAvailableByDefault = true;
+
+    // runtime gate (don’t serialize this one)
+    private bool _flightUnlocked = true;
+    // Optional public read-only
+    public bool IsFlightUnlocked => _flightUnlocked;
 
     public bool IsFlying => _isFlying;
 
@@ -134,33 +140,36 @@ public class PlayerFlight : MonoBehaviour
     private float   _lmbFrozenPitchDeg = 0f;          // player pitch at LMB-down
 
     private void Awake()
+{
+    _rb = GetComponent<Rigidbody>();
+    _dash = GetComponent<PlayerDash>();
+    _playerMovement = GetComponent<PlayerMovement>();
+    _gravityModifier = GetComponent<GravityModifier>();
+    _playerJump = GetComponent<PlayerJump>();
+    _animator = GetComponent<Animator>();
+    _playerCamera = GetComponentInChildren<PlayerCamera>();
+    _gravityBody = GetComponent<GravityBody>();
+
+    if (_cameraTransform == null && Camera.main != null)
+        _cameraTransform = Camera.main.transform;
+
+    // Find the actual Camera for FOV control
+    if (_playerCamera != null)
     {
-        _rb = GetComponent<Rigidbody>();
-        _dash = GetComponent<PlayerDash>();
-        _playerMovement = GetComponent<PlayerMovement>();
-        _gravityModifier = GetComponent<GravityModifier>();
-        _playerJump = GetComponent<PlayerJump>();
-        _animator = GetComponent<Animator>();
-        _playerCamera = GetComponentInChildren<PlayerCamera>();
-        _gravityBody = GetComponent<GravityBody>();
-
-        if (_cameraTransform == null && Camera.main != null)
-            _cameraTransform = Camera.main.transform;
-
-        // Find the actual Camera for FOV control
-        if (_playerCamera != null)
-        {
-            _playerCam = _playerCamera.GetComponentInChildren<Camera>();
-        }
-        if (_playerCam == null && Camera.main != null)
-        {
-            _playerCam = Camera.main;
-        }
-
-        // Capture base FOV so we can always lerp back smoothly
-        if (_playerCam != null)
-            _baseFov = _playerCam.fieldOfView;
+        _playerCam = _playerCamera.GetComponentInChildren<Camera>();
     }
+    if (_playerCam == null && Camera.main != null)
+    {
+        _playerCam = Camera.main;
+    }
+
+    // Capture base FOV so we can always lerp back smoothly
+    if (_playerCam != null)
+        _baseFov = _playerCam.fieldOfView;
+
+    // >>> NEW: seed runtime gate from inspector
+    _flightUnlocked = _flightAvailableByDefault;
+}
 
     private void Update()
     {
@@ -211,31 +220,39 @@ if (_isInGravityTransition)
     // ───────────────────────── Activation / Deactivation ─────────────────────────
 
     private void HandleActivationInput()
+{
+    // >>> NEW: gate activation unless flight is unlocked
+    if (!_flightUnlocked)
     {
-        bool isGrounded = _playerMovement != null && _playerMovement.IsGrounded();
+        _activationHeld = false;
+        _activationTimer = 0f;
+        return;
+    }
 
-        if (Input.GetKey(_flightActivationKey))
+    bool isGrounded = _playerMovement != null && _playerMovement.IsGrounded();
+
+    if (Input.GetKey(_flightActivationKey))
+    {
+        if (!_activationHeld)
         {
-            if (!_activationHeld)
-            {
-                _activationHeld = true;
-                _activationTimer = 0f;
-            }
-            else
-            {
-                _activationTimer += Time.deltaTime;
-                if (!_isFlying && _activationTimer >= _flightActivationTime && !isGrounded)
-                {
-                    EnterFlight();
-                }
-            }
+            _activationHeld = true;
+            _activationTimer = 0f;
         }
         else
         {
-            _activationHeld = false;
-            _activationTimer = 0f;
+            _activationTimer += Time.deltaTime;
+            if (!_isFlying && _activationTimer >= _flightActivationTime && !isGrounded)
+            {
+                EnterFlight();
+            }
         }
     }
+    else
+    {
+        _activationHeld = false;
+        _activationTimer = 0f;
+    }
+}
 
     private void HandleDeactivationInput()
     {
@@ -818,21 +835,26 @@ if (_isInGravityTransition)
     // ───────────────────────── Script / Animator helpers ─────────────────────────
 
     private void DisableOtherScriptsForFlight()
+{
+    _disabledScripts.Clear();
+    MonoBehaviour[] all = GetComponents<MonoBehaviour>();
+    foreach (var mb in all)
     {
-        _disabledScripts.Clear();
-        MonoBehaviour[] all = GetComponents<MonoBehaviour>();
-        foreach (var mb in all)
-        {
-            if (mb == null) continue;
-            if (mb == (MonoBehaviour)this) continue;
+        if (mb == null) continue;
+        if (mb == (MonoBehaviour)this) continue;
 
-            if (mb.enabled)
-            {
-                mb.enabled = false;
-                _disabledScripts.Add(mb);
-            }
+        // keep these active
+        if (mb is PlayerExperience) continue;
+        if (mb is PlayerHealth) continue;
+        if (mb is PlayerStamina) continue;
+
+        if (mb.enabled)
+        {
+            mb.enabled = false;
+            _disabledScripts.Add(mb);
         }
     }
+}
 
     private void RestoreDisabledScripts()
     {
@@ -880,4 +902,22 @@ public void OnGravityTransitionCompleted(Vector3 oldDir, Vector3 newDir, float d
         _rb.velocity = Vector3.zero; // small safety to avoid odd impulses
     }
 }
+
+/// <summary>Set from Jetpack (or cheats). If false while flying, we exit flight.</summary>
+public void SetFlightUnlocked(bool unlocked)
+{
+    _flightUnlocked = unlocked;
+    if (!unlocked && _isFlying)
+        ExitFlight();
+}
+
+public void UnlockFlight() => SetFlightUnlocked(true);
+public void LockFlight()   => SetFlightUnlocked(false);
+
+#if UNITY_EDITOR
+private void OnValidate()
+{
+    _flightUnlocked = _flightAvailableByDefault;
+}
+#endif
 }

@@ -973,7 +973,7 @@ GameObject:
   - component: {fileID: 88401440}
   m_Layer: 5
   m_Name: HP_ST_XP
-  m_TagString: Untagged
+  m_TagString: HUD
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -1763,6 +1763,11 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 139348642}
   m_CullTransparentMesh: 1
+--- !u!4 &145812339 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 6317808496830887484, guid: f248ae032277cde4cb4e5caf1d92c2cb, type: 3}
+  m_PrefabInstance: {fileID: 1219625436}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1 &150052349
 GameObject:
   m_ObjectHideFlags: 0
@@ -5259,6 +5264,7 @@ MonoBehaviour:
   _flightActivationTime: 0.3
   _flightDeactivationKey: 304
   _doubleTapTime: 0.4
+  _flightAvailableByDefault: 0
 --- !u!114 &636263569
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -5364,6 +5370,7 @@ MonoBehaviour:
   inventory:
   - boostershoesrare
   - oldzwombsbonecommon
+  - jetpackrare
 --- !u!1 &640391299
 GameObject:
   m_ObjectHideFlags: 0
@@ -5687,8 +5694,8 @@ MonoBehaviour:
   m_TargetGraphic: {fileID: 66724683}
   m_HandleRect: {fileID: 66724682}
   m_Direction: 0
-  m_Value: 0
-  m_Size: 0.9999999
+  m_Value: 1
+  m_Size: 1
   m_NumberOfSteps: 0
   m_OnValueChanged:
     m_PersistentCalls:
@@ -11619,7 +11626,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: f248ae032277cde4cb4e5caf1d92c2cb, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 2590.9
+      value: 2587.427
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: f248ae032277cde4cb4e5caf1d92c2cb, type: 3}
       propertyPath: m_LocalPosition.z
@@ -12282,7 +12289,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   m_Navigation:
-    m_Mode: 3
+    m_Mode: 0
     m_WrapAround: 0
     m_SelectOnUp: {fileID: 0}
     m_SelectOnDown: {fileID: 0}
@@ -14248,6 +14255,40 @@ MonoBehaviour:
     appliedScaleTweak: {x: 0, y: 0, z: 0}
     appliedPositionTweak: {x: 0, y: 0, z: 0}
     appliedRotationTweak: {x: 0, y: 0, z: 0}
+  - itemName: Jetpack
+    inspectorName: jetpackrare
+    itemDescription: "An older  jetpack model. Clunky, but it\u2019ll carry you where
+      you need to go. Perfect for a first taste of the skies."
+    category: 1
+    rarity: 1
+    style: 1
+    itemIcon: {fileID: 21300000, guid: 30261a919fac9174eaa3ae5e16c1f3a8, type: 3}
+    weaponSubtype: 1
+    ranged_MBCDamage: 0
+    ranged_MBCCooldown: 0
+    ranged_CursorSprite: {fileID: 0}
+    ranged_XMove: 
+    ranged_ZMove: 
+    melee_MBCAmount: 1
+    melee_MBCDamages: 00000000
+    melee_MBCComboCooldown: 0.3
+    melee_XMove: Bone Smash
+    melee_ZMove: Femurang
+    healthBonus: 0
+    staminaBonus: 0
+    speedBonus: 0
+    attachments:
+    - label: Jetpack
+      prefab: {fileID: 4995856493583081989, guid: f46c0a05ee0f6b04cab00dec9f05128d, type: 3}
+      bone: {fileID: 145812339}
+      localPosition: {x: 0, y: 0.00169, z: 0.0033}
+      localEulerAngles: {x: -6.919, y: 0.366, z: 0.246}
+      localScale: {x: 0.0023, y: 0.0023, z: 0.002}
+      rotationSpace: 0
+      referenceRoot: {fileID: 0}
+    appliedScaleTweak: {x: 0, y: 0, z: 0}
+    appliedPositionTweak: {x: 0, y: 0, z: 0}
+    appliedRotationTweak: {x: 0, y: 0, z: 0}
   itemsScrollViewContent: {fileID: 1802929965}
   itemCardPrefabC: {fileID: 6072740933410521139, guid: 2e68883e387e53640ac45659014f64dc, type: 3}
   itemCardPrefabR: {fileID: 6072740933410521139, guid: c4e881d950cf32041b182bd44b96bc9a, type: 3}
@@ -15209,7 +15250,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   m_Navigation:
-    m_Mode: 3
+    m_Mode: 0
     m_WrapAround: 0
     m_SelectOnUp: {fileID: 0}
     m_SelectOnDown: {fileID: 0}

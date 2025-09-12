@@ -8,6 +8,7 @@ TagManager:
   - GameObject
   - FollowCamera
   - PortraitCamera
+  - HUD
   layers:
   - Default
   - TransparentFX
