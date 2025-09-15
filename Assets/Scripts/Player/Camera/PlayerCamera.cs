@@ -562,6 +562,122 @@ public class PlayerCamera : MonoBehaviour
     {
         UnityEngine.InputSystem.Mouse.current.WarpCursorPosition(initialCursorPosition);
     }
+
+    // NEW: after releasing RMB, wait 2s of no panning, then auto-align behind player smoothly.
+    StartDelayedAutoAlignBehindPlayer(2f, 0.35f);
+}
+
+public void StartDelayedAutoAlignBehindPlayer(float idleSeconds = 2f, float alignDuration = 0.35f)
+{
+    // Reuse the same slot used by other auto-align routines so we can cancel/replace cleanly
+    if (_autoAlignRoutine != null)
+        StopCoroutine(_autoAlignRoutine);
+
+    _autoAlignRoutine = StartCoroutine(DelayedAutoAlignBehindPlayerRoutine(idleSeconds, alignDuration));
+}
+
+private IEnumerator DelayedAutoAlignBehindPlayerRoutine(float idleSeconds, float alignDuration)
+{
+    float wait = Mathf.Max(0f, idleSeconds);
+    float t = 0f;
+
+    // ── Wait phase: abort if panning resumes or an external controller grabs the camera
+    while (t < wait)
+    {
+        bool rmb = UnityEngine.InputSystem.Mouse.current != null &&
+                   UnityEngine.InputSystem.Mouse.current.rightButton.isPressed;
+        bool lmb = UnityEngine.InputSystem.Mouse.current != null &&
+                   UnityEngine.InputSystem.Mouse.current.leftButton.isPressed;
+
+        if (isExternallyControlledPanning || rmb || lmb || isPanning || isLeftPanning)
+        {
+            _autoAlignRoutine = null;
+            yield break;
+        }
+
+        t += Time.deltaTime;
+        yield return null;
+    }
+
+    // ── Align phase (also aborts if panning resumes mid-blend)
+    bool isInSpaceNow = gravityBody != null && gravityBody.IsInSpace;
+
+    if (isInSpaceNow)
+    {
+        Vector3 up = currentGravityZoneUp;
+        Vector3 playerFwdFlat = Vector3.ProjectOnPlane(target.forward, up).normalized;
+        if (playerFwdFlat.sqrMagnitude < 0.0001f)
+        {
+            _autoAlignRoutine = null;
+            yield break;
+        }
+
+        Quaternion startRot  = cameraTransform.rotation;
+        Quaternion targetRot = Quaternion.LookRotation(playerFwdFlat, up);
+
+        float dur = Mathf.Max(0.01f, alignDuration);
+        float s = 0f;
+        while (s < 1f)
+        {
+            bool rmb = UnityEngine.InputSystem.Mouse.current != null &&
+                       UnityEngine.InputSystem.Mouse.current.rightButton.isPressed;
+            bool lmb = UnityEngine.InputSystem.Mouse.current != null &&
+                       UnityEngine.InputSystem.Mouse.current.leftButton.isPressed;
+            if (isExternallyControlledPanning || rmb || lmb || isPanning || isLeftPanning)
+            {
+                _autoAlignRoutine = null;
+                yield break;
+            }
+
+            s += Time.deltaTime / dur;
+            float eased = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(s));
+            cameraTransform.rotation = Quaternion.Slerp(startRot, targetRot, eased);
+            yield return null;
+        }
+
+        cameraTransform.rotation = targetRot;
+    }
+    else
+    {
+        Vector3 zoneUp = currentGravityZoneUp;
+        Vector3 playerForward = Vector3.ProjectOnPlane(playerTransform.forward, zoneUp).normalized;
+        if (playerForward.sqrMagnitude < 0.0001f)
+        {
+            _autoAlignRoutine = null;
+            yield break;
+        }
+
+        Vector3 baseForward = Vector3.ProjectOnPlane(Vector3.forward, zoneUp).normalized;
+        if (baseForward.sqrMagnitude < 0.0001f)
+            baseForward = Vector3.ProjectOnPlane(Vector3.right, zoneUp).normalized;
+
+        float startYaw  = _yawDegrees;
+        float targetYaw = SignedAngle(baseForward, playerForward, zoneUp);
+
+        float dur = Mathf.Max(0.01f, alignDuration);
+        float s = 0f;
+        while (s < 1f)
+        {
+            bool rmb = UnityEngine.InputSystem.Mouse.current != null &&
+                       UnityEngine.InputSystem.Mouse.current.rightButton.isPressed;
+            bool lmb = UnityEngine.InputSystem.Mouse.current != null &&
+                       UnityEngine.InputSystem.Mouse.current.leftButton.isPressed;
+            if (isExternallyControlledPanning || rmb || lmb || isPanning || isLeftPanning)
+            {
+                _autoAlignRoutine = null;
+                yield break;
+            }
+
+            s += Time.deltaTime / dur;
+            float eased = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(s));
+            _yawDegrees = Mathf.LerpAngle(startYaw, targetYaw, eased);
+            yield return null;
+        }
+
+        _yawDegrees = targetYaw;
+    }
+
+    _autoAlignRoutine = null;
 }
 
     private void UpdateCameraPosition()
@@ -1123,13 +1239,14 @@ private void EndLeftPanning()
 
     isLeftPanning = false;
 
-    // If RMB is still held, DO NOT auto-align, DO NOT unlock, and FORGET any LMB snapshot
+    // If RMB is still held, don't unlock or auto-align yet.
+    // Also forget any LMB snapshot so it never overrides "behind player".
     bool rmbStillDown = UnityEngine.InputSystem.Mouse.current != null &&
                         UnityEngine.InputSystem.Mouse.current.rightButton.isPressed;
     if (rmbStillDown)
     {
-        _hasLmbSnapshot = false; // forget previous LMB return target while both were down
-        return; // keep cursor locked for RMB pan; no warp/unlock
+        _hasLmbSnapshot = false;
+        return;
     }
 
     // Fully end panning (no RMB)
@@ -1137,6 +1254,7 @@ private void EndLeftPanning()
 
     if (wasInSpace)
     {
+        // Keep orientation stable for this frame in space
         finalRotation = Quaternion.LookRotation(finalCameraForward, finalCameraUp);
         cameraTransform.rotation = finalRotation;
     }
@@ -1145,9 +1263,14 @@ private void EndLeftPanning()
         UnityEngine.InputSystem.Mouse.current.WarpCursorPosition(initialCursorPosition);
     }
 
-    // Smoothly restore the relative pose we had at (the most recent) LMB start,
-    // or fall back to "behind" if we don't have a snapshot.
-    StartAutoAlignBackToPanStart(0.35f);
+    // IMPORTANT CHANGE:
+    // After releasing LMB, always return smoothly to "behind the player"
+    // (even when the player is idle and RMB was used to orbit without turning the player).
+    // This uses your existing helpers and works in both gravity & space.
+    StartAutoAlignBehindPlayer(0.35f);
+
+    // We explicitly ignore any LMB snapshot target now.
+    _hasLmbSnapshot = false;
 }
 
 public void StartAutoAlignBackToPanStart(float duration = 0.35f, System.Action onComplete = null)

@@ -5265,6 +5265,8 @@ MonoBehaviour:
   _flightDeactivationKey: 304
   _doubleTapTime: 0.4
   _flightAvailableByDefault: 0
+  _takeoffGroundIgnoreSeconds: 0.35
+  _landExitHoldSeconds: 0.12
 --- !u!114 &636263569
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -5695,7 +5697,7 @@ MonoBehaviour:
   m_HandleRect: {fileID: 66724682}
   m_Direction: 0
   m_Value: 1
-  m_Size: 1
+  m_Size: 0.9999999
   m_NumberOfSteps: 0
   m_OnValueChanged:
     m_PersistentCalls:
@@ -14257,8 +14259,8 @@ MonoBehaviour:
     appliedRotationTweak: {x: 0, y: 0, z: 0}
   - itemName: Jetpack
     inspectorName: jetpackrare
-    itemDescription: "An older  jetpack model. Clunky, but it\u2019ll carry you where
-      you need to go. Perfect for a first taste of the skies."
+    itemDescription: "An older model. Clunky, but it\u2019ll carry you where you
+      need to go. Perfect for a first taste of the skies."
     category: 1
     rarity: 1
     style: 1
@@ -14279,7 +14281,7 @@ MonoBehaviour:
     speedBonus: 0
     attachments:
     - label: Jetpack
-      prefab: {fileID: 4995856493583081989, guid: f46c0a05ee0f6b04cab00dec9f05128d, type: 3}
+      prefab: {fileID: 4263127243952333459, guid: f46c0a05ee0f6b04cab00dec9f05128d, type: 3}
       bone: {fileID: 145812339}
       localPosition: {x: 0, y: 0.00169, z: 0.0033}
       localEulerAngles: {x: -6.919, y: 0.366, z: 0.246}

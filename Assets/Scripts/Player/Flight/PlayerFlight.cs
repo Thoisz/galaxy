@@ -61,6 +61,17 @@ public class PlayerFlight : MonoBehaviour
     [SerializeField, Tooltip("When ON, the player can activate flight without any item. Turn OFF for real gameplay and unlock via Jetpack later.")]
     private bool _flightAvailableByDefault = true;
 
+    [Header("Flight Hysteresis")]
+[SerializeField, Tooltip("Ignore ground checks for this long right after takeoff.")]
+private float _takeoffGroundIgnoreSeconds = 0.35f;
+
+[SerializeField, Tooltip("Must stay grounded this long before we exit flight.")]
+private float _landExitHoldSeconds = 0.12f;
+
+// runtime
+private float _takeoffIgnoreUntil = -10f;
+private float _groundedSince = -1f;
+
     // runtime gate (don’t serialize this one)
     private bool _flightUnlocked = true;
     // Optional public read-only
@@ -191,37 +202,59 @@ public class PlayerFlight : MonoBehaviour
     }
 
     private void FixedUpdate()
-    {
-        // Fail-safe: never stay locked forever if some volume never fires "Completed"
-if (_isInGravityTransition)
 {
-    _gravityLockTimer += Time.fixedDeltaTime;
-    if (_gravityLockTimer >= GRAVITY_LOCK_TIMEOUT)
+    // gravity transition fail-safe
+    if (_isInGravityTransition)
     {
-        _isInGravityTransition = false;
-        _gravityLockTimer = 0f;
-    }
-}
-
-        if (!_isFlying) return;
-        if (_isInGravityTransition) return;
-        if (_dash != null && _dash.IsDashing()) return;
-
-        // Auto-exit when we touch ground
-        if (_autoExitOnGround && IsTouchingGround())
+        _gravityLockTimer += Time.fixedDeltaTime;
+        if (_gravityLockTimer >= GRAVITY_LOCK_TIMEOUT)
         {
-            ExitFlight();
-            return;
+            _isInGravityTransition = false;
+            _gravityLockTimer = 0f;
         }
-
-        ApplyFlightMovement_YawSmooth_PitchOneToOne_WithPitchAutoLevel();
     }
+
+    if (!_isFlying) return;
+    if (_isInGravityTransition) return;
+    if (_dash != null && _dash.IsDashing()) return;
+
+    // Stable ground-exit logic with hysteresis
+    if (_autoExitOnGround)
+    {
+        if (Time.time >= _takeoffIgnoreUntil)
+        {
+            bool touching = IsTouchingGround();
+
+            if (touching)
+            {
+                if (_groundedSince < 0f) _groundedSince = Time.time;
+
+                if (Time.time - _groundedSince >= _landExitHoldSeconds)
+                {
+                    ExitFlight("Grounded hold satisfied");
+                    return;
+                }
+            }
+            else
+            {
+                _groundedSince = -1f;
+            }
+        }
+        else
+        {
+            // still in grace: ignore ground
+            _groundedSince = -1f;
+        }
+    }
+
+    ApplyFlightMovement_YawSmooth_PitchOneToOne_WithPitchAutoLevel();
+}
 
     // ───────────────────────── Activation / Deactivation ─────────────────────────
 
     private void HandleActivationInput()
 {
-    // >>> NEW: gate activation unless flight is unlocked
+    // gate activation unless flight is unlocked
     if (!_flightUnlocked)
     {
         _activationHeld = false;
@@ -229,7 +262,8 @@ if (_isInGravityTransition)
         return;
     }
 
-    bool isGrounded = _playerMovement != null && _playerMovement.IsGrounded();
+    bool flaggedGrounded = _playerMovement != null && _playerMovement.IsGrounded();
+    bool physicsGrounded = IsTouchingGround(); // our sphere cast (relative to current up)
 
     if (Input.GetKey(_flightActivationKey))
     {
@@ -241,7 +275,10 @@ if (_isInGravityTransition)
         else
         {
             _activationTimer += Time.deltaTime;
-            if (!_isFlying && _activationTimer >= _flightActivationTime && !isGrounded)
+            if (!_isFlying
+                && _activationTimer >= _flightActivationTime
+                && !flaggedGrounded
+                && !physicsGrounded)
             {
                 EnterFlight();
             }
@@ -437,26 +474,33 @@ if (_isInGravityTransition)
     _waitingLmbRealign = false;
     _wasLeftPanActive = false;
 
-    // Record base FOV if we didn't in Awake (just in case)
     if (_playerCam != null && _baseFov <= 0f)
         _baseFov = _playerCam.fieldOfView;
+
+    // Hysteresis bookkeeping
+    _takeoffIgnoreUntil = Time.time + Mathf.Max(0f, _takeoffGroundIgnoreSeconds);
+    _groundedSince = -1f;
+
+    Debug.Log("[Flight] EnterFlight (takeoff grace active)", this);
 }
 
-    private void ExitFlight()
-    {
-        _isFlying = false;
+    private void ExitFlight(string reason)
+{
+    _isFlying = false;
+    Debug.Log($"[Flight] ExitFlight: {reason}", this);
 
-        SetAnimatorParams(false, 0f);
+    SetAnimatorParams(false, 0f);
 
-        RestoreDisabledScripts();
-        _rb.useGravity = true;
+    RestoreDisabledScripts();
+    _rb.useGravity = true;
 
-        // Do NOT snap FOV; Update() keeps lerping back to _baseFov smoothly.
-        _superActive = false;
-        _superJustActivated = false;
-        ResetIdleUpDown();
-        _idleVerticalVel = 0f;
-    }
+    _superActive = false;
+    _superJustActivated = false;
+    ResetIdleUpDown();
+    _idleVerticalVel = 0f;
+}
+
+private void ExitFlight() => ExitFlight("Unknown");
 
     private void ApplyFlightMovement_YawSmooth_PitchOneToOne_WithPitchAutoLevel()
 {
@@ -555,50 +599,63 @@ if (_isInGravityTransition)
     float camVertForMove, horizFactorForMove;
 
     // ───────────────────── In-flight pitch assist (Space / Shift) ─────────────────────
-    // Allow pitch with ANY movement direction (W/A/S/D). Gate by camera half:
-    //  - Space (nose up) only when camera pitched above horizon
-    //  - Shift (nose down) only when camera pitched below horizon
-    bool canApplyPitch = hasInput;
+// Allow pitch with ANY movement direction (W/A/S/D). Gate by camera half
+bool canApplyPitch = hasInput;
 
-    // Current camera pitch relative to the flight-up ( + = looking up,  - = looking down )
-    Vector3 camFwdNoAssist = _cameraTransform.forward;
-    Vector3 flatNoAssist   = Vector3.ProjectOnPlane(camFwdNoAssist, _flightUp).normalized;
-    float camPitchDegForGate = Vector3.SignedAngle(flatNoAssist, camFwdNoAssist, Vector3.Cross(flatNoAssist, _flightUp));
+// Current camera pitch relative to the flight-up (+ = looking up, - = looking down)
+Vector3 camFwdNoAssist = _cameraTransform.forward;
+Vector3 flatNoAssist   = Vector3.ProjectOnPlane(camFwdNoAssist, _flightUp).normalized;
+float camPitchDegForGate = Vector3.SignedAngle(flatNoAssist, camFwdNoAssist, Vector3.Cross(flatNoAssist, _flightUp));
 
-    const float HALF_DEADZONE_DEG = 0.15f; // small cushion around horizon to prevent flicker
-    bool allowAscendAssist  = canApplyPitch && (camPitchDegForGate >  HALF_DEADZONE_DEG);
-    bool allowDescendAssist = canApplyPitch && (camPitchDegForGate < -HALF_DEADZONE_DEG);
+// Deadzone and crossover tolerance
+const float HALF_DEADZONE_DEG = 0.20f;    // tiny cushion around horizon to prevent flicker
+const float CROSSOVER_DEG     = 20f;      // allow each key into the opposite half by this much
 
-    // Timers only advance when in the correct half
-    if (allowAscendAssist  && Input.GetKey(_idleAscendKey)) _assistAscHoldTimer  += Time.fixedDeltaTime; else _assistAscHoldTimer  = 0f;
-    if (allowDescendAssist && Input.GetKey(_idleDescendKey)) _assistDescHoldTimer += Time.fixedDeltaTime; else _assistDescHoldTimer = 0f;
+// Space is allowed when camera is above horizon … or up to CROSSOVER_DEG below
+bool allowAscendAssist = canApplyPitch && (camPitchDegForGate > -CROSSOVER_DEG + HALF_DEADZONE_DEG);
 
-    float desiredAssist = 0f;
-    if (allowAscendAssist  && _assistAscHoldTimer  >= _pitchAssistHoldDelay) desiredAssist += (-_pitchAssistDegrees) * inputMag; // Space → nose up
-    if (allowDescendAssist && _assistDescHoldTimer >= _pitchAssistHoldDelay) desiredAssist += (+_pitchAssistDegrees) * inputMag; // Shift → nose down
+// Shift is allowed when camera is below horizon … or up to CROSSOVER_DEG above
+bool allowDescendAssist = canApplyPitch && (camPitchDegForGate <  CROSSOVER_DEG - HALF_DEADZONE_DEG);
 
-    // Clamp assist so we never push past the camera pitch limit window
-    float assistMin, assistMax;
-    if (ignoreCameraForControls)
-    {
-        assistMin = -_pitchAssistDegrees;
-        assistMax = +_pitchAssistDegrees;
-    }
-    else
-    {
-        // NOTE: this uses the same sign convention this method already used for limit calc
-        Vector3 flatForLimit = flatNoAssist;
-        float camPitchNoAssist_ForLimit = -Vector3.SignedAngle(flatForLimit, camFwdNoAssist, Vector3.Cross(flatForLimit, _flightUp));
-        float limit = _pitchAssistCamLimit;
-        assistMin = -limit - camPitchNoAssist_ForLimit;
-        assistMax =  limit - camPitchNoAssist_ForLimit;
-    }
+// Timers
+if (allowAscendAssist && Input.GetKey(_idleAscendKey))
+    _assistAscHoldTimer += Time.fixedDeltaTime;
+else
+    _assistAscHoldTimer = 0f;
 
-    desiredAssist = Mathf.Clamp(desiredAssist, assistMin, assistMax);
-    _activePitchAssistDeg = Mathf.MoveTowardsAngle(
-        _activePitchAssistDeg, desiredAssist,
-        _pitchAssistLerpSpeed * Time.fixedDeltaTime * _pitchAssistDegrees
-    );
+if (allowDescendAssist && Input.GetKey(_idleDescendKey))
+    _assistDescHoldTimer += Time.fixedDeltaTime;
+else
+    _assistDescHoldTimer = 0f;
+
+float desiredAssist = 0f;
+if (allowAscendAssist && _assistAscHoldTimer >= _pitchAssistHoldDelay)
+    desiredAssist += (-_pitchAssistDegrees) * inputMag; // Space → nose up
+
+if (allowDescendAssist && _assistDescHoldTimer >= _pitchAssistHoldDelay)
+    desiredAssist += (+_pitchAssistDegrees) * inputMag; // Shift → nose down
+
+// Clamp assist so we never push past the camera pitch limit window
+float assistMin, assistMax;
+if (ignoreCameraForControls)
+{
+    assistMin = -_pitchAssistDegrees;
+    assistMax = +_pitchAssistDegrees;
+}
+else
+{
+    Vector3 flatForLimit = flatNoAssist;
+    float camPitchNoAssist_ForLimit = -Vector3.SignedAngle(flatForLimit, camFwdNoAssist, Vector3.Cross(flatForLimit, _flightUp));
+    float limit = _pitchAssistCamLimit;
+    assistMin = -limit - camPitchNoAssist_ForLimit;
+    assistMax =  limit - camPitchNoAssist_ForLimit;
+}
+
+desiredAssist = Mathf.Clamp(desiredAssist, assistMin, assistMax);
+_activePitchAssistDeg = Mathf.MoveTowardsAngle(
+    _activePitchAssistDeg, desiredAssist,
+    _pitchAssistLerpSpeed * Time.fixedDeltaTime * _pitchAssistDegrees
+);
 
     // ───────────────────────── IGNORE-CAMERA BRANCH (LMB freelook)
     if (ignoreCameraForControls)
@@ -907,8 +964,8 @@ public void OnGravityTransitionCompleted(Vector3 oldDir, Vector3 newDir, float d
 public void SetFlightUnlocked(bool unlocked)
 {
     _flightUnlocked = unlocked;
-    if (!unlocked && _isFlying)
-        ExitFlight();
+if (!unlocked && _isFlying)
+    ExitFlight("External lock (SetFlightUnlocked(false))");
 }
 
 public void UnlockFlight() => SetFlightUnlocked(true);
