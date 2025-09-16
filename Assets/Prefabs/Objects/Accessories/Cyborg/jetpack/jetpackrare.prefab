@@ -10154,6 +10154,7 @@ GameObject:
   - component: {fileID: 5902123412614881050}
   - component: {fileID: 5022372513964740360}
   - component: {fileID: 6380966188436686124}
+  - component: {fileID: 8002047602957755538}
   m_Layer: 0
   m_Name: jetpackrare
   m_TagString: Untagged
@@ -10275,6 +10276,49 @@ MonoBehaviour:
   holeScaleNormal: 0.0011
   holeScaleSuper: 0.00265
   holeScaleShrinkDuration: 1
+--- !u!114 &8002047602957755538
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4263127243952333459}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ce39af91231c78047951e48113d81620, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  playerFlight: {fileID: 0}
+  playerBody: {fileID: 0}
+  playerCam: {fileID: 0}
+  gravityBody: {fileID: 0}
+  holdKey: 304
+  triggerKey: 32
+  warmupSeconds: 0.5
+  minHoldSeconds: 0.9
+  maxStartHorizSpeed: 0.2
+  launchUpVelocity: 18
+  launchForwardVelocity: 0
+  chargeFovIncrease: 4
+  launchFovIncrease: 10
+  fovLerpUpSpeed: 10
+  fovLerpDownSpeed: 4.5
+  groundCheckRadius: 0.25
+  groundCheckDistance: 0.55
+  groundMask:
+    serializedVersion: 2
+    m_Bits: 9
+  freezeHorizontal: 1
+  requireFuel: 1
+  fuelCost: 25
+  fuelSource: {fileID: 5902123412614881050}
+  fuelHasMethod: HasFuel
+  fuelConsumeMethod: ConsumeFuel
+  phase1FX: {fileID: 0}
+  phase2FX: {fileID: 0}
+  chargeLoop: {fileID: 0}
+  armedLoop: {fileID: 0}
+  launchSfx: {fileID: 0}
 --- !u!1 &4596540419969368912
 GameObject:
   m_ObjectHideFlags: 0
