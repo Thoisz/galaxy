@@ -310,7 +310,7 @@ GameObject:
   - component: {fileID: 7428337830539605575}
   - component: {fileID: 1939639661689701276}
   m_Layer: 5
-  m_Name: FuelBarUI
+  m_Name: FuelBarUICommon
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
