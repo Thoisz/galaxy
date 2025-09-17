@@ -31,6 +31,7 @@ public class PlayerMovement : MonoBehaviour
     private PlayerCamera _playerCamera;
     private float _lastJumpTime = -10f; // Track when the last jump occurred
     private PlayerDash _playerDash;
+    private bool _externalStopMovement = false;
 
     // Movement state
     private Vector3 _lastFrameVelocity;
@@ -270,42 +271,33 @@ public class PlayerMovement : MonoBehaviour
     }
 
     private void ApplyMovement()
+{
+    // Skip movement during dash
+    if (_playerDash != null && _playerDash.IsDashing())
+        return;
+
+    // NEW: hard stop requested by external system (jetpack charge)
+    if (_externalStopMovement)
+        return;
+
+    if (_worldMoveDirection.magnitude < 0.1f)
+        return;
+
+    float currentSpeed = GetCurrentMoveSpeed();
+    Vector3 targetVelocity = _worldMoveDirection * currentSpeed;
+
+    _rigidbody.AddForce(targetVelocity - GetHorizontalVelocity(), ForceMode.VelocityChange);
+
+    if (_worldMoveDirection.magnitude > 0.1f)
     {
-        // FIXED: Skip movement application during dash
-        if (_playerDash != null && _playerDash.IsDashing())
-            return;
-
-        if (_worldMoveDirection.magnitude < 0.1f)
-            return;
-
-        // Calculate current speed with modifiers
-        float currentSpeed = GetCurrentMoveSpeed();
-
-        // Calculate velocity change
-        Vector3 targetVelocity = _worldMoveDirection * currentSpeed;
-
-        // Apply velocity
-        _rigidbody.AddForce(targetVelocity - GetHorizontalVelocity(), ForceMode.VelocityChange);
-
-        // Rotate character to face move direction
-        if (_worldMoveDirection.magnitude > 0.1f)
-        {
-            float turnSpeed = _runningTurnSpeed;
-
-            // Calculate rotation that keeps character up aligned with gravity while facing movement direction
-            Quaternion targetRotation = Quaternion.LookRotation(
-                _worldMoveDirection,
-                _gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up
-            );
-
-            // Apply rotation with smoothing
-            _rigidbody.rotation = Quaternion.Slerp(
-                _rigidbody.rotation,
-                targetRotation,
-                Time.fixedDeltaTime * turnSpeed
-            );
-        }
+        float turnSpeed = _runningTurnSpeed;
+        Quaternion targetRotation = Quaternion.LookRotation(
+            _worldMoveDirection,
+            _gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up
+        );
+        _rigidbody.rotation = Quaternion.Slerp(_rigidbody.rotation, targetRotation, Time.fixedDeltaTime * turnSpeed);
     }
+}
 
     private void ApplyFriction()
     {
@@ -357,20 +349,27 @@ public class PlayerMovement : MonoBehaviour
     }
 
     private void UpdateAnimator()
+{
+    if (_animator == null) return;
+
+    _animator.SetBool("isGrounded", _isGrounded);
+
+    // If an external stop is active (jetpack charge), force idle regardless of input.
+    bool effectiveHasInput = !_externalStopMovement && _hasMovementInput;
+    _animator.SetBool("isRunning", effectiveHasInput);
+
+    // Move speed param: zero while externally stopped, else normal normalized speed
+    if (_externalStopMovement)
     {
-        if (_animator == null) return;
-
-        // Update ground state
-        _animator.SetBool("isGrounded", _isGrounded);
-
-        // Update running state - now using input instead of velocity
-        _animator.SetBool("isRunning", _hasMovementInput);
-
-        // Still track velocity for movement speed (affects animation speed)
+        _animator.SetFloat("moveSpeed", 0f);
+    }
+    else
+    {
         float horizontalSpeed = GetHorizontalVelocity().magnitude;
         float currentMaxSpeed = GetCurrentMoveSpeed();
         _animator.SetFloat("moveSpeed", horizontalSpeed / currentMaxSpeed);
     }
+}
 
     // Map input using the axes captured at LMB-pan start (so camera free-look doesn't affect movement)
 private void CalculateMoveDirectionLocked(float horizontal, float vertical)
@@ -419,6 +418,11 @@ private void CalculateMoveDirectionLocked(float horizontal, float vertical)
         _speedModifiers.Add(modifier);
         Debug.Log($"Added speed modifier: +{modifier}. New speed: {GetCurrentMoveSpeed()}");
     }
+
+    public void SetExternalStopMovement(bool on)
+{
+    _externalStopMovement = on;
+}
 
     public void RemoveSpeedModifier(float modifier)
     {

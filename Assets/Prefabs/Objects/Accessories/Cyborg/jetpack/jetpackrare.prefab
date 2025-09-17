@@ -10263,7 +10263,7 @@ MonoBehaviour:
   playerBody: {fileID: 0}
   readFromPlayerFlight: 1
   fastSpeed: 20
-  superSpeed: 40
+  superSpeed: 80
   idleCore: 0.5
   idleOuter: 0.15
   fastCore: 0.85
@@ -10292,13 +10292,15 @@ MonoBehaviour:
   playerBody: {fileID: 0}
   playerCam: {fileID: 0}
   gravityBody: {fileID: 0}
-  holdKey: 304
+  playerCrouch: {fileID: 0}
+  playerMovement: {fileID: 0}
+  playerJump: {fileID: 0}
   triggerKey: 32
-  warmupSeconds: 0.5
-  minHoldSeconds: 0.9
-  maxStartHorizSpeed: 0.2
-  launchUpVelocity: 18
-  launchForwardVelocity: 0
+  minChargeTimeSeconds: 0.2
+  chargeTimeSeconds: 3
+  minLaunchVelocity: 15
+  maxLaunchVelocity: 150
+  forwardUpRatio: 20
   chargeFovIncrease: 4
   launchFovIncrease: 10
   fovLerpUpSpeed: 10
@@ -10308,17 +10310,11 @@ MonoBehaviour:
   groundMask:
     serializedVersion: 2
     m_Bits: 9
-  freezeHorizontal: 1
   requireFuel: 1
   fuelCost: 25
   fuelSource: {fileID: 5902123412614881050}
   fuelHasMethod: HasFuel
   fuelConsumeMethod: ConsumeFuel
-  phase1FX: {fileID: 0}
-  phase2FX: {fileID: 0}
-  chargeLoop: {fileID: 0}
-  armedLoop: {fileID: 0}
-  launchSfx: {fileID: 0}
 --- !u!1 &4596540419969368912
 GameObject:
   m_ObjectHideFlags: 0

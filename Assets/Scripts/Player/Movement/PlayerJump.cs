@@ -31,6 +31,14 @@ public class PlayerJump : MonoBehaviour
     [SerializeField] private AudioClip _airJumpSound;
     [SerializeField] private float _jumpSoundVolume = 0.5f;
 
+    // ── External suppression gate (set by JetpackBoostJump)
+    [SerializeField] private bool _jumpSuppressed = false;
+    public  void SetJumpSuppressed(bool value) => _jumpSuppressed = value;
+    public  bool IsJumpSuppressed => _jumpSuppressed;
+
+    [SerializeField] private PlayerCrouch _playerCrouch;     // to read IsCrouching
+    private JetpackBoostJump _boostJump;                      // present when jetpack is equipped
+
     // Private fields
     private Rigidbody _rigidbody;
     private GravityBody _gravityBody;
@@ -64,6 +72,9 @@ public class PlayerJump : MonoBehaviour
     // Get components
     _rigidbody = GetComponent<Rigidbody>();
     _gravityBody = GetComponent<GravityBody>();
+
+    if (_playerCrouch == null) _playerCrouch = GetComponent<PlayerCrouch>();
+    if (_boostJump == null)    _boostJump    = GetComponentInChildren<JetpackBoostJump>(true);
     
     // Find player movement script if not assigned
     if (_playerMovement == null)
@@ -93,127 +104,134 @@ public class PlayerJump : MonoBehaviour
 }
 
     private void Update()
+{
+    // Ensure we still have a reference to the booster if the jetpack was (un)equiped at runtime
+    if (_boostJump == null)
+        _boostJump = GetComponentInChildren<JetpackBoostJump>(true);
+
+    bool isGrounded = _playerMovement.IsGrounded();
+
+    // === HARD GATE ===
+    // If the jetpack booster is equipped+enabled, we're grounded, and Shift is held,
+    // swallow Space this frame so normal jump cannot fire.
+    bool jetpackEquipped =
+        _boostJump != null &&
+        _boostJump.isActiveAndEnabled &&
+        _boostJump.gameObject.activeInHierarchy;
+
+    bool shiftHeld = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+    bool blockJumpNow = jetpackEquipped && isGrounded && shiftHeld;
+
+#if UNITY_EDITOR
+    // Debug once per press to verify the gate
+    if (blockJumpNow && Input.GetKeyDown(KeyCode.Space))
+        Debug.Log("[PlayerJump] Blocked Space: jetpack equipped + Shift held on ground.");
+#endif
+
+    // Fall/anim bookkeeping
+    UpdateFallTracking(isGrounded);
+
+    // Landing reset
+    if (isGrounded && !_wasGroundedLastFrame)
     {
-        // Track grounded state
-        bool isGrounded = _playerMovement.IsGrounded();
-        
-        // Update fall tracking
-        UpdateFallTracking(isGrounded);
-        
-        // Reset jumps when landing
-        if (isGrounded && !_wasGroundedLastFrame)
-        {            
-            // Store the fall time when landing
-            if (_currentFallTime > 0)
-            {
-                _lastFallTime = _currentFallTime;
-            }
-            
-            ResetJumps();
-            _hasResetJumpsAfterGrounded = true;
-        }
-        
-        // Make sure we're not grounded during jumps
-        if (!isGrounded)
+        if (_currentFallTime > 0) _lastFallTime = _currentFallTime;
+        ResetJumps();
+        _hasResetJumpsAfterGrounded = true;
+    }
+
+    if (!isGrounded)
+    {
+        _hasResetJumpsAfterGrounded = false;
+
+        // Walked off a ledge → skip to air-jumps
+        if (_wasGroundedLastFrame && _currentJumpCount == 0)
         {
-            _hasResetJumpsAfterGrounded = false;
-            
-            // Track when player walks off a ledge (was grounded but now isn't, without jumping)
-            if (_wasGroundedLastFrame && _currentJumpCount == 0)
-            {
-                // Mark that we didn't jump from ground
-                _jumpedFromGround = false;
-                
-                // Skip straight to air jumps when walking off a ledge
-                _currentJumpCount = 2; // Start at 2 since we're skipping first and double jump
-                _hasDoubleJumped = true; // Skip double jump phase
-                
-                // We get all air jumps when walking off a ledge
-                _remainingAirJumps = _maxAirJumps;
-            }
+            _jumpedFromGround  = false;
+            _currentJumpCount  = 2;
+            _hasDoubleJumped   = true;
+            _remainingAirJumps = _maxAirJumps;
         }
-        
-        // Jump input - allow jumping during dash
-        if (Input.GetKeyDown(KeyCode.Space) && _canJump)
-        {
-            bool isDashing = _playerDash != null && _playerDash.IsDashing();
-            
-            if (isDashing)
-            {
-                // When dashing, force jump!
-                TryJumpFromDash();
-            }
-            else
-            {
-                // Normal jump
-                TryJump();
-            }
-        }
-        
-        // Update animator with fall time
+    }
+
+    // If blocked, bail BEFORE reading Space logic (prevents normal jump)
+    if (blockJumpNow)
+    {
         if (_animator != null)
         {
-            // If in the air and falling, use current fall time
-            if (!isGrounded && _isFalling)
-            {
-                _animator.SetFloat("fallTime", _currentFallTime);
-            }
-            // When grounded, use the last recorded fall time
-            else if (isGrounded)
-            {
-                _animator.SetFloat("fallTime", _lastFallTime);
-            }
-            // For other cases (like rising during a jump)
-            else
-            {
-                _animator.SetFloat("fallTime", 0f);
-            }
+            if (!isGrounded && _isFalling) _animator.SetFloat("fallTime", _currentFallTime);
+            else if (isGrounded)           _animator.SetFloat("fallTime", _lastFallTime);
+            else                           _animator.SetFloat("fallTime", 0f);
         }
-        
-        // Store grounded state for next frame
         _wasGroundedLastFrame = isGrounded;
+        return; // swallow Space for this frame
     }
+
+    // Normal jump input (also allowed during dash), plus optional external suppression
+    if (Input.GetKeyDown(KeyCode.Space) && _canJump && !_jumpSuppressed)
+    {
+        bool isDashing = _playerDash != null && _playerDash.IsDashing();
+        if (isDashing) TryJumpFromDash();
+        else           TryJump();
+    }
+
+    // Animator fallTime maintenance
+    if (_animator != null)
+    {
+        if (!isGrounded && _isFalling) _animator.SetFloat("fallTime", _currentFallTime);
+        else if (isGrounded)           _animator.SetFloat("fallTime", _lastFallTime);
+        else                           _animator.SetFloat("fallTime", 0f);
+    }
+
+    _wasGroundedLastFrame = isGrounded;
+}
+
+private void OnDisable()
+{
+    _jumpSuppressed = false;
+}
 
     private void TryJumpFromDash()
 {
-    bool isGrounded = _playerMovement.IsGrounded();
-    
-    // Only allow jumping from dash if grounded
-    if (!isGrounded)
+    // Same safety gate here too
+    bool jetpackEquipped =
+        _boostJump != null &&
+        _boostJump.isActiveAndEnabled &&
+        _boostJump.gameObject.activeInHierarchy;
+
+    bool shiftHeld = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+    if (jetpackEquipped && _playerMovement.IsGrounded() && shiftHeld)
     {
+#if UNITY_EDITOR
+        Debug.Log("[PlayerJump] TryJumpFromDash() blocked by jetpack+Shift gate.");
+#endif
         return;
     }
-    
-    // Reset fall time when jumping from ground
+
+    bool isGrounded = _playerMovement.IsGrounded();
+    if (!isGrounded) return;
+
     _lastFallTime = 0f;
     _currentFallTime = 0f;
     _isFalling = false;
     _wasActuallyFallingLastFrame = false;
-    
-    // CHANGED: Don't end the dash - just notify it that we're jumping
+
     if (_playerDash != null && _playerDash.IsDashing())
-    {
         _playerDash.NotifyJumpedDuringDash();
-    }
-    
-    // FIXED: Use half the normal jump force to compensate for dash momentum
+
     float reducedJumpForce = _firstJumpForce * 0.6f;
     PerformJumpWithoutEndingDash(reducedJumpForce, _firstJumpCooldown, _firstJumpSound);
-    
-    // Set jump state for next jump to be a double jump
+
     _currentJumpCount = 1;
     _hasDoubleJumped = false;
     _jumpedFromGround = true;
     _remainingAirJumps = _maxAirJumps;
-    
-    // Force the grounded state to false right away
+
     _wasGroundedLastFrame = false;
-    
-    // Trigger animation and set flag
+
     if (_animator != null)
     {
         _animator.SetTrigger("jump");
-        _jumpTriggerActive = true; // NEW: Track that jump trigger is active
+        _jumpTriggerActive = true;
     }
 }
 
@@ -320,112 +338,100 @@ private void PerformJumpWithoutEndingDash(float force, float cooldown, AudioClip
 
     private void TryJump()
 {
+    // Extra safety: re-check the same gate here in case someone calls TryJump() directly
+    bool jetpackEquipped =
+        _boostJump != null &&
+        _boostJump.isActiveAndEnabled &&
+        _boostJump.gameObject.activeInHierarchy;
+
+    bool shiftHeld = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+    if (jetpackEquipped && _playerMovement.IsGrounded() && shiftHeld)
+    {
+#if UNITY_EDITOR
+        Debug.Log("[PlayerJump] TryJump() blocked by jetpack+Shift gate.");
+#endif
+        return;
+    }
+
     bool isGrounded = _playerMovement.IsGrounded();
-    
+
     // First jump (from ground)
     if (isGrounded)
     {
-        // Reset fall time when jumping from ground
         _lastFallTime = 0f;
         _currentFallTime = 0f;
         _isFalling = false;
-        
+
         PerformJump(_firstJumpForce, _firstJumpCooldown, _firstJumpSound);
         _currentJumpCount = 1;
         _hasDoubleJumped = false;
         _jumpedFromGround = true;
         _remainingAirJumps = _maxAirJumps;
-        
-        // Force the grounded state to false right away
+
         _wasGroundedLastFrame = false;
-        
-        // Trigger animation and set flag
+
         if (_animator != null)
         {
             _animator.SetTrigger("jump");
-            _jumpTriggerActive = true; // NEW: Track that jump trigger is active
+            _jumpTriggerActive = true;
         }
         return;
     }
-    
-    // Double jump (second jump, but only if we jumped from ground first)
+
+    // Double jump
     if (!_hasDoubleJumped && _jumpedFromGround)
     {
-        // Check stamina for double jump
         if (_playerStamina != null && !_playerStamina.TryUseJumpStamina())
-        {
-            return; // Not enough stamina
-        }
-        
-        // Reset fall time for double jump
+            return;
+
         _currentFallTime = 0f;
         _isFalling = false;
         _wasActuallyFallingLastFrame = false;
-        
+
         PerformJump(_doubleJumpForce, _doubleJumpCooldown, _doubleJumpSound);
         _hasDoubleJumped = true;
         _currentJumpCount = 2;
-        
-        // Spawn VFX if assigned
+
         if (_doubleJumpVFXPrefab != null)
             Instantiate(_doubleJumpVFXPrefab, transform.position, Quaternion.identity);
-            
-        // Trigger animation and set flag
+
         if (_animator != null)
         {
             _animator.SetTrigger("doubleJump");
-            _jumpTriggerActive = true; // NEW: Track that jump trigger is active
+            _jumpTriggerActive = true;
         }
         return;
     }
-    
-    // Air jumps (after double jump or when walked off a ledge)
+
+    // Air jumps
     if (_remainingAirJumps > 0)
     {
-        // Check stamina for air jump
         if (_playerStamina != null && !_playerStamina.TryUseJumpStamina())
-        {
-            return; // Not enough stamina
-        }
-        
-        // Reset current fall tracking for air jump
+            return;
+
         _currentFallTime = 0f;
         _isFalling = false;
         _wasActuallyFallingLastFrame = false;
-        
+
         PerformJump(_airJumpForce, _airJumpCooldown, _airJumpSound);
         _currentJumpCount++;
         _remainingAirJumps--;
-        
-        // Spawn VFX if assigned
+
         if (_airJumpVFXPrefab != null)
         {
             GameObject vfx = Instantiate(_airJumpVFXPrefab, transform.position, Quaternion.identity);
-            
-            // Scale VFX based on remaining jumps
             float progress = 1f - (float)_remainingAirJumps / _maxAirJumps;
             float scale = _airJumpVFXScale * (1f - progress * 0.5f);
             vfx.transform.localScale = new Vector3(scale, scale, scale);
-            
-            // Change color if possible
-            Renderer renderer = vfx.GetComponent<Renderer>();
-            if (renderer != null)
-            {
-                renderer.material.color = Color.Lerp(_airJumpVFXColor, Color.white, progress);
-            }
+            var r = vfx.GetComponent<Renderer>();
+            if (r != null) r.material.color = Color.Lerp(_airJumpVFXColor, Color.white, progress);
         }
-        
-        // Use alternating air jump animations and set flag
+
         if (_animator != null)
         {
-            // Set the air jump side parameter (0 = left, 1 = right)
             _animator.SetInteger("airJumpSide", _airJumpSide);
-            
-            // Trigger the air jump
             _animator.SetTrigger("airJump");
-            _jumpTriggerActive = true; // NEW: Track that jump trigger is active
-            
-            // Toggle the side for next air jump
+            _jumpTriggerActive = true;
             _airJumpSide = (_airJumpSide == 0) ? 1 : 0;
         }
     }

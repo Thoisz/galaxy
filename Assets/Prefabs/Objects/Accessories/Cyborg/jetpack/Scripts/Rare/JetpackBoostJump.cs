@@ -2,87 +2,73 @@ using System.Reflection;
 using UnityEngine;
 
 [DisallowMultipleComponent]
+[DefaultExecutionOrder(-100)] // run BEFORE PlayerJump so we can block the Space down-frame
 public class JetpackBoostJump : MonoBehaviour
 {
     [Header("Auto-find (from parents)")]
-    [SerializeField] private PlayerFlight playerFlight; // auto from parents if null
-    [SerializeField] private Rigidbody    playerBody;   // auto from parents if null
-    [SerializeField] private Camera       playerCam;    // auto from parents or Camera.main
-    [SerializeField] private Component    gravityBody;  // optional (e.g., GravityBody). Auto if present in parents
+    [SerializeField] private PlayerFlight   playerFlight;
+    [SerializeField] private Rigidbody      playerBody;
+    [SerializeField] private Camera         playerCam;
+    [SerializeField] private Component      gravityBody;
+    [SerializeField] private PlayerCrouch   playerCrouch;
+    [SerializeField] private PlayerMovement playerMovement;
+    [SerializeField] private PlayerJump     playerJump;   // to suppress normal jumps
 
     [Header("Input")]
-    [SerializeField] private KeyCode holdKey    = KeyCode.LeftShift; // must hold
-    [SerializeField] private KeyCode triggerKey = KeyCode.Space;     // must hold
+    [SerializeField] private KeyCode triggerKey = KeyCode.Space; // pressed with crouch
 
-    [Header("Charge Phases (seconds)")]
-    [Tooltip("Phase 1 → Phase 2 (armed) time. Releasing before this just cancels.")]
-    [SerializeField] private float warmupSeconds = 0.50f;
-    [Tooltip("Minimum total hold time required before a launch is allowed.")]
-    [SerializeField] private float minHoldSeconds = 0.90f;
+    [Header("Charge")]
+    [Tooltip("Nothing happens unless you hold at least this long.")]
+    [SerializeField] private float minChargeTimeSeconds = 0.10f;
+    [Tooltip("Time to ramp from min → max launch velocity.")]
+    [SerializeField] private float chargeTimeSeconds = 1.00f;
+    [Tooltip("Launch velocity at t=0 (applied Up, and if moving, Forward).")]
+    [SerializeField] private float minLaunchVelocity = 8f;
+    [Tooltip("Launch velocity at t=chargeTimeSeconds.")]
+    [SerializeField] private float maxLaunchVelocity = 18f;
 
-    [Header("Start Conditions")]
-    [Tooltip("Player must be essentially still to begin charging (horizontal speed <= this).")]
-    [SerializeField] private float maxStartHorizSpeed = 0.2f;
+    [Header("Forward boost")]
+    [Tooltip("Horizontal launch is Up * this ratio when movement is held.")]
+    [SerializeField] private float forwardUpRatio = 1.5f;
 
-    [Header("Launch")]
-    [Tooltip("Upward velocity (relative to gravity up) applied on release when armed).")]
-    [SerializeField] private float launchUpVelocity = 18f;
-    [Tooltip("Optional forward carry added along player forward at launch.")]
-    [SerializeField] private float launchForwardVelocity = 0f;
-
-    [Header("FOV")]
+    [Header("FOV (optional flair)")]
     [SerializeField] private float chargeFovIncrease = 4f;
     [SerializeField] private float launchFovIncrease = 10f;
     [SerializeField] private float fovLerpUpSpeed   = 10f;
     [SerializeField] private float fovLerpDownSpeed = 4.5f;
 
-    [Header("Ground Check")]
+    [Header("Ground Check (fallback if PlayerMovement missing)")]
     [SerializeField] private float groundCheckRadius   = 0.25f;
     [SerializeField] private float groundCheckDistance = 0.55f;
     [SerializeField] private LayerMask groundMask = ~0;
 
-    [Header("Movement While Charging")]
-    [Tooltip("Zero horizontal velocity each FixedUpdate while charging.")]
-    [SerializeField] private bool freezeHorizontal = true;
-
     [Header("Fuel (optional via reflection)")]
     [SerializeField] private bool          requireFuel = false;
     [SerializeField] private float         fuelCost    = 25f;
-    [SerializeField] private MonoBehaviour fuelSource; // any component of yours
+    [SerializeField] private MonoBehaviour fuelSource;
     [Tooltip("Bool HasFuel(float amount)")]
-    [SerializeField] private string fuelHasMethod = "HasFuel";
+    [SerializeField] private string fuelHasMethod     = "HasFuel";
     [Tooltip("Void ConsumeFuel(float amount)")]
     [SerializeField] private string fuelConsumeMethod = "ConsumeFuel";
 
-    [Header("Charge FX (children of the jetpack)")]
-    [SerializeField] private GameObject phase1FX;   // charging up
-    [SerializeField] private GameObject phase2FX;   // armed
-
-    [Header("Optional Audio (on the jetpack)")]
-    [SerializeField] private AudioSource chargeLoop;
-    [SerializeField] private AudioSource armedLoop;
-    [SerializeField] private AudioSource launchSfx;
-
-    // ───── internals ─────
+    // ── internals ──
     private float _holdTimer = 0f;
     private bool  _charging  = false;
-    private bool  _armed     = false;
     private float _baseFov   = -1f;
 
-    // Reflection into PlayerFlight.EnterFlight()
-    private MethodInfo _miEnterFlight;
-
-    // GravityBody.GetEffectiveGravityDirection()
-    private MethodInfo _miGetGravityDir;
+    private MethodInfo _miEnterFlight;   // PlayerFlight.EnterFlight()
+    private MethodInfo _miGetGravityDir; // GravityBody.GetEffectiveGravityDirection()
 
     private void Awake()
     {
-        if (!playerFlight) playerFlight = GetComponentInParent<PlayerFlight>();
-        if (!playerBody)   playerBody   = GetComponentInParent<Rigidbody>();
+        if (!playerFlight)   playerFlight   = GetComponentInParent<PlayerFlight>();
+        if (!playerBody)     playerBody     = GetComponentInParent<Rigidbody>();
+        if (!playerCrouch)   playerCrouch   = GetComponentInParent<PlayerCrouch>();
+        if (!playerMovement) playerMovement = GetComponentInParent<PlayerMovement>();
+        if (!playerJump)     playerJump     = GetComponentInParent<PlayerJump>();
 
         if (!playerCam)
         {
-            // Try PlayerFlight → PlayerCamera → Camera
             if (playerFlight)
             {
                 var pc = playerFlight.GetComponentInChildren<PlayerCamera>(true);
@@ -96,11 +82,7 @@ public class JetpackBoostJump : MonoBehaviour
         }
         if (playerCam) _baseFov = playerCam.fieldOfView;
 
-        if (!gravityBody)
-        {
-            // If you use a custom gravity component (e.g., GravityBody), we’ll find it.
-            gravityBody = GetComponentInParent<GravityBody>();
-        }
+        if (!gravityBody) gravityBody = GetComponentInParent<GravityBody>();
         if (gravityBody)
         {
             _miGetGravityDir = gravityBody.GetType().GetMethod(
@@ -109,7 +91,6 @@ public class JetpackBoostJump : MonoBehaviour
             );
         }
 
-        // Reflect EnterFlight on PlayerFlight
         if (playerFlight)
         {
             _miEnterFlight = playerFlight.GetType().GetMethod(
@@ -117,41 +98,32 @@ public class JetpackBoostJump : MonoBehaviour
                 BindingFlags.Instance | BindingFlags.NonPublic
             );
         }
+    }
 
-        HideChargeFX();
+    private void OnDisable()
+    {
+        _charging  = false;
+        _holdTimer = 0f;
+        if (playerMovement) playerMovement.SetExternalStopMovement(false);
+        if (playerJump)     playerJump.SetJumpSuppressed(false);
     }
 
     private void Update()
     {
-        // Never run while already flying
         if (playerFlight && playerFlight.IsFlying)
         {
             CancelCharge();
             EaseFovToBase();
-            return;
         }
 
-        // Must be grounded to do anything
-        if (!IsGrounded())
-        {
-            CancelCharge();
-            EaseFovToBase();
-            return;
-        }
+        bool grounded   = playerMovement ? playerMovement.IsGrounded() : IsGrounded();
+        bool crouchHeld = playerCrouch && playerCrouch.IsCrouching; // Shift
+        bool spaceHeld  = Input.GetKey(triggerKey);
 
-        // Must be (nearly) still to start
-        if (!_charging && playerBody)
-        {
-            var up = GetUp();
-            var horiz = Vector3.ProjectOnPlane(playerBody.velocity, up);
-            if (horiz.magnitude > maxStartHorizSpeed)
-            {
-                EaseFovToBase();
-                return;
-            }
-        }
+        bool wantsCharge = grounded && crouchHeld && spaceHeld;
 
-        bool wantsCharge = Input.GetKey(holdKey) && Input.GetKey(triggerKey);
+        // Block normal jump when crouching on ground or while charging
+        SuppressJump((crouchHeld && grounded) || _charging);
 
         if (!_charging)
         {
@@ -160,10 +132,12 @@ public class JetpackBoostJump : MonoBehaviour
         }
         else
         {
-            // While charging: if keys released or we lost ground → resolve
-            if (!wantsCharge || !IsGrounded())
+            bool comboReleased = !(crouchHeld && spaceHeld);
+            bool lostGround    = !grounded;
+
+            if (comboReleased || lostGround)
             {
-                if (_armed && _holdTimer >= minHoldSeconds && IsGrounded())
+                if (_holdTimer >= minChargeTimeSeconds)
                     Launch();
                 else
                     CancelCharge();
@@ -179,39 +153,40 @@ public class JetpackBoostJump : MonoBehaviour
 
         _holdTimer += Time.fixedDeltaTime;
 
-        if (!_armed && _holdTimer >= warmupSeconds)
+        // While charging: HARD LOCK horizontal each physics step
+        if (playerBody)
         {
-            _armed = true;
-            SetPhase(armed: true);
+            Vector3 up   = GetUp();
+            Vector3 v    = playerBody.velocity;
+            Vector3 vert = Vector3.Project(v, up);
+            playerBody.velocity = vert; // no horizontal
         }
 
-        if (freezeHorizontal && playerBody)
-        {
-            Vector3 up = GetUp();
-            Vector3 v  = playerBody.velocity;
-            Vector3 horiz = Vector3.ProjectOnPlane(v, up);
-            playerBody.velocity = v - horiz; // keep vertical only (usually 0 while grounded)
-        }
-
-        // FOV while charging
+        // FOV while charging (scaled by charge fraction)
         if (playerCam && _baseFov > 0f)
         {
-            float target = _baseFov + chargeFovIncrease * Mathf.Clamp01(_holdTimer / warmupSeconds);
+            float t = chargeTimeSeconds <= 0f ? 1f : Mathf.Clamp01(_holdTimer / chargeTimeSeconds);
+            float target = _baseFov + chargeFovIncrease * t;
             playerCam.fieldOfView = Mathf.Lerp(playerCam.fieldOfView, target, Time.fixedDeltaTime * fovLerpUpSpeed);
         }
     }
 
-    // ───── actions ─────
+    // ── actions ──
 
     private void StartCharge()
     {
         _charging  = true;
-        _armed     = false;
         _holdTimer = 0f;
 
-        SetPhase(armed: false);
+        // Instantly zero horizontal
+        if (playerBody)
+        {
+            Vector3 up   = GetUp();
+            Vector3 vert = Vector3.Project(playerBody.velocity, up);
+            playerBody.velocity = vert;
+        }
 
-        if (chargeLoop) { chargeLoop.loop = true; chargeLoop.Play(); }
+        if (playerMovement) playerMovement.SetExternalStopMovement(true);
     }
 
     private void CancelCharge()
@@ -219,11 +194,10 @@ public class JetpackBoostJump : MonoBehaviour
         if (!_charging) return;
 
         _charging  = false;
-        _armed     = false;
         _holdTimer = 0f;
 
-        HideChargeFX();
-        StopAllSounds();
+        if (playerMovement) playerMovement.SetExternalStopMovement(false);
+        SuppressJump(false);
     }
 
     private void Launch()
@@ -232,23 +206,54 @@ public class JetpackBoostJump : MonoBehaviour
 
         if (requireFuel) ConsumeFuel(fuelCost);
 
-        HideChargeFX();
-        StopAllSounds();
-        if (launchSfx) launchSfx.Play();
-
         if (playerBody)
         {
             Vector3 up = GetUp();
-            Vector3 vel = up * Mathf.Max(0f, launchUpVelocity);
-            if (launchForwardVelocity > 0f)
-                vel += transform.forward * launchForwardVelocity;
-            playerBody.velocity = vel;
+
+            // Charge-scaled magnitude
+            float t = chargeTimeSeconds <= 0f ? 1f : Mathf.Clamp01(_holdTimer / chargeTimeSeconds);
+            float v = Mathf.Lerp(minLaunchVelocity, maxLaunchVelocity, t);
+
+            // Are we holding any movement input at release?
+            bool movingHeld = playerMovement
+                ? playerMovement.HasMovementInput()
+                : (Mathf.Abs(Input.GetAxisRaw("Horizontal")) > 0.1f || Mathf.Abs(Input.GetAxisRaw("Vertical")) > 0.1f);
+
+            Vector3 newVel = up * v; // vertical component
+
+            if (movingHeld)
+            {
+                // Use intended move direction (camera-relative), else fallback
+                Vector3 fwd = Vector3.zero;
+                if (playerMovement != null)
+                    fwd = playerMovement.GetMoveDirection();
+
+                if (fwd.sqrMagnitude < 1e-6f) fwd = transform.forward;
+
+                // Purely horizontal forward
+                fwd = Vector3.ProjectOnPlane(fwd, up);
+                if (fwd.sqrMagnitude < 1e-6f)
+                {
+                    Vector3 camFwd = playerCam ? playerCam.transform.forward : transform.forward;
+                    fwd = Vector3.ProjectOnPlane(camFwd, up);
+                }
+                if (fwd.sqrMagnitude > 1e-6f) fwd.Normalize();
+
+                // Forward is 1.5x up (configurable via forwardUpRatio)
+                newVel += fwd * (v * forwardUpRatio);
+            }
+
+            playerBody.velocity = newVel;
         }
+
+        if (playerMovement) playerMovement.SetExternalStopMovement(false);
+        if (playerMovement) playerMovement.NotifyJumped();
 
         // FOV kick
         if (playerCam && _baseFov > 0f)
             playerCam.fieldOfView = Mathf.Lerp(playerCam.fieldOfView, _baseFov + launchFovIncrease, 0.85f);
 
+        SuppressJump(false);
         StartCoroutine(WaitForApexThenEnterFlight());
     }
 
@@ -275,30 +280,11 @@ public class JetpackBoostJump : MonoBehaviour
         EaseFovToBase();
     }
 
-    // ───── helpers ─────
+    // ── helpers ──
 
-    private void SetPhase(bool armed)
+    private void SuppressJump(bool on)
     {
-        if (phase1FX) phase1FX.SetActive(!armed);
-        if (phase2FX) phase2FX.SetActive(armed);
-
-        if (armed)
-        {
-            if (chargeLoop && chargeLoop.isPlaying) chargeLoop.Stop();
-            if (armedLoop) { armedLoop.loop = true; armedLoop.Play(); }
-        }
-    }
-
-    private void HideChargeFX()
-    {
-        if (phase1FX) phase1FX.SetActive(false);
-        if (phase2FX) phase2FX.SetActive(false);
-    }
-
-    private void StopAllSounds()
-    {
-        if (chargeLoop && chargeLoop.isPlaying) chargeLoop.Stop();
-        if (armedLoop  && armedLoop.isPlaying)  armedLoop.Stop();
+        if (playerJump) playerJump.SetJumpSuppressed(on);
     }
 
     private void EaseFovToBase()
@@ -309,8 +295,9 @@ public class JetpackBoostJump : MonoBehaviour
 
     private bool IsGrounded()
     {
-        if (!playerBody) return false;
+        if (playerMovement) return playerMovement.IsGrounded();
 
+        if (!playerBody) return false;
         Vector3 up   = GetUp();
         Vector3 orig = playerBody.position + up * 0.1f;
         Vector3 dir  = -up;
@@ -326,7 +313,6 @@ public class JetpackBoostJump : MonoBehaviour
 
     private Vector3 GetUp()
     {
-        // If you have custom gravity, ask for it
         if (gravityBody != null && _miGetGravityDir != null)
         {
             try
@@ -336,16 +322,12 @@ public class JetpackBoostJump : MonoBehaviour
             }
             catch { }
         }
-        // Fallback
         return Vector3.up;
     }
 
     private void TryEnterFlight()
     {
         if (playerFlight == null) return;
-
-        // Respect your unlock if needed (optional)
-        // if (!playerFlight.IsFlightUnlocked) return;
 
         try
         {
@@ -377,14 +359,15 @@ public class JetpackBoostJump : MonoBehaviour
 #if UNITY_EDITOR
     private void OnValidate()
     {
-        warmupSeconds   = Mathf.Max(0f, warmupSeconds);
-        minHoldSeconds  = Mathf.Max(warmupSeconds, minHoldSeconds);
-        maxStartHorizSpeed = Mathf.Max(0f, maxStartHorizSpeed);
-        launchUpVelocity = Mathf.Max(0f, launchUpVelocity);
-        groundCheckRadius   = Mathf.Max(0.01f, groundCheckRadius);
-        groundCheckDistance = Mathf.Max(0.05f, groundCheckDistance);
-        fovLerpUpSpeed   = Mathf.Max(0f, fovLerpUpSpeed);
-        fovLerpDownSpeed = Mathf.Max(0f, fovLerpDownSpeed);
+        minChargeTimeSeconds = Mathf.Max(0f, minChargeTimeSeconds);
+        chargeTimeSeconds    = Mathf.Max(0f, chargeTimeSeconds);
+        minLaunchVelocity    = Mathf.Max(0f, minLaunchVelocity);
+        maxLaunchVelocity    = Mathf.Max(minLaunchVelocity, maxLaunchVelocity);
+        forwardUpRatio       = Mathf.Max(0f, forwardUpRatio);
+        fovLerpUpSpeed       = Mathf.Max(0f, fovLerpUpSpeed);
+        fovLerpDownSpeed     = Mathf.Max(0f, fovLerpDownSpeed);
+        groundCheckRadius    = Mathf.Max(0.01f, groundCheckRadius);
+        groundCheckDistance  = Mathf.Max(0.05f, groundCheckDistance);
     }
 #endif
 }
