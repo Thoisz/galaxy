@@ -8,6 +8,9 @@ public class CameraBoostFX : MonoBehaviour
     [SerializeField] private PlayerCamera playerCamera; // where we push the offset + read gravity up
     [SerializeField] private Camera       cam;          // camera whose FOV we tween
 
+    // ─────────────────────────────────────────────────────
+    // POSITIONAL LAG
+
     [Header("Ascent lag")]
     [Tooltip("Meters to lag opposite to Up immediately after launch.")]
     [SerializeField] private float ascentLagMax = 3f;
@@ -34,6 +37,9 @@ public class CameraBoostFX : MonoBehaviour
 
     [Tooltip("Curve time=0..1 → scale 1..0 for post-landing offset fade.")]
     [SerializeField] private AnimationCurve postLandCurve = AnimationCurve.Linear(0, 1, 1, 0);
+
+    // ─────────────────────────────────────────────────────
+    // FOV
 
     [Header("FOV (Charging/Ascent)")]
     [Tooltip("Extra FOV (usually negative) while charging, scaled by charge 0..1.")]
@@ -66,6 +72,25 @@ public class CameraBoostFX : MonoBehaviour
     [Tooltip("Lerp rate back to base FOV when effects end (idle).")]
     [SerializeField] private float fovLerpDown = 6f;
 
+    // ─────────────────────────────────────────────────────
+    // CHARGE TREMBLE (Perlin shake)
+
+    [Header("Charge tremble (camera shake while charging)")]
+    [Tooltip("Peak shake amplitude in meters (applied as camera offset).")]
+    [SerializeField] private float chargeShakeAmplitude = 0.15f;
+
+    [Tooltip("Shake frequency in Hz (how fast the noise wiggles).")]
+    [SerializeField] private float chargeShakeFrequency = 18f;
+
+    [Tooltip("Seconds for shake to fade in after Charge begins.")]
+    [SerializeField] private float chargeShakeFadeIn = 0.12f;
+
+    [Tooltip("Seconds for shake to fade out when Charge ends/cancels.")]
+    [SerializeField] private float chargeShakeFadeOut = 0.18f;
+
+    [Tooltip("If ON, shake axes are camera-space (Right/Up/Forward). If OFF, world-space.")]
+    [SerializeField] private bool chargeShakeInCameraSpace = true;
+
     // ── runtime state ──
     private enum Phase { Idle, Charging, Ascending, Falling }
     private Phase _phase = Phase.Idle;
@@ -74,8 +99,8 @@ public class CameraBoostFX : MonoBehaviour
     private float _targetFov;
 
     private float _charge01;      // 0..1 during charging
-    private float _ascentTimer;   // since launch
-    private float _fallTimer;     // since apex (for lag)
+    private float _ascentTimer;   // since launch (positional lag)
+    private float _fallTimer;     // since apex (positional lag)
 
     // falling FOV tween (absolute)
     private float _fallFovT = 0f;       // 0..1 time along fall curve
@@ -92,6 +117,11 @@ public class CameraBoostFX : MonoBehaviour
     private Vector3 _lastAppliedOffset = Vector3.zero; // what we gave PlayerCamera last frame
     private float   _postLandT = 0f;                   // timer for landing offset fade
 
+    // charge shake runtime
+    private float _chargeShakeTime = 0f;
+    private float _chargeShakeOutT = 0f; // time into fade out
+    private float _noiseSeedX, _noiseSeedY, _noiseSeedZ;
+
     private void Awake()
     {
         if (!playerCamera) playerCamera = GetComponent<PlayerCamera>();
@@ -106,6 +136,11 @@ public class CameraBoostFX : MonoBehaviour
             postLandCurve = AnimationCurve.Linear(0, 1, 1, 0);
         if (fallFovCurve == null || fallFovCurve.length == 0)
             fallFovCurve = AnimationCurve.EaseInOut(0, 0, 1, 1);
+
+        // initialize shake seeds so each play session is a bit different
+        _noiseSeedX = Random.Range(0f, 1000f);
+        _noiseSeedY = Random.Range(0f, 1000f);
+        _noiseSeedZ = Random.Range(0f, 1000f);
     }
 
     private void OnEnable()
@@ -191,6 +226,7 @@ public class CameraBoostFX : MonoBehaviour
             float scale = Mathf.Clamp01(ascentLagCurve.Evaluate(norm)); // expect 1→0
             newOffset = -_lastUp * (ascentLagMax * scale);
             _lastAppliedOffset = newOffset;
+            _chargeShakeOutT = 0f; // ensure no charge tail continues here
         }
         else if (_phase == Phase.Falling)
         {
@@ -199,8 +235,15 @@ public class CameraBoostFX : MonoBehaviour
             float scale = Mathf.Clamp01(fallLagCurve.Evaluate(norm)); // expect 0→1
             newOffset = -_lastUp * (fallLagMax * scale);
             _lastAppliedOffset = newOffset;
+            _chargeShakeOutT = 0f; // ensure no charge tail continues here
         }
-        else // Idle or Charging
+        else if (_phase == Phase.Charging)
+        {
+            // during charge, no positional lag — but we add tremble
+            Vector3 shake = ComputeChargeShakeOffset(Time.deltaTime);
+            newOffset = shake; // do not write to _lastAppliedOffset (we don't want post-land catch-up from shake)
+        }
+        else // Idle
         {
             // Post-landing catch-up: ease whatever offset we had toward zero
             if (_lastAppliedOffset.sqrMagnitude > 1e-6f && postLandCatchupTime > 0f)
@@ -221,6 +264,12 @@ public class CameraBoostFX : MonoBehaviour
                 newOffset = Vector3.zero;
                 _lastAppliedOffset = Vector3.zero;
             }
+
+            // allow a short “tail” fade after leaving Charging
+            if (_chargeShakeOutT > 0f && _chargeShakeOutT < chargeShakeFadeOut)
+            {
+                newOffset += ComputeChargeShakeOffset(Time.deltaTime);
+            }
         }
 
         playerCamera.SetExternalCameraOffset(newOffset);
@@ -233,19 +282,32 @@ public class CameraBoostFX : MonoBehaviour
     {
         _landFovActive = false;
 
+        // if we just entered Charging, reset shake timers
+        if (_phase != Phase.Charging)
+        {
+            _chargeShakeTime = 0f;
+            _chargeShakeOutT = 0f;
+        }
+
         _phase = Phase.Charging;
         _charge01 = Mathf.Clamp01(normalized);
-        // keep offsets; charging uses 0
+        // keep offsets; charging uses only shake offset
     }
 
     public void OnChargeCancel()
     {
         _landFovActive = false;
 
+        // leaving Charging → start fade-out tail for shake
+        if (_phase == Phase.Charging)
+        {
+            _chargeShakeOutT = 0f; // will fade in LateUpdate idle branch
+        }
+
         _phase = Phase.Idle;
         _charge01 = 0f;
         _ascentTimer = _fallTimer = 0f;
-        // keep residual offset for post-land fade if any
+        // keep residual offset for post-land fade if any (comes from ascent/fall only)
     }
 
     public void OnLaunch(Vector3 up)
@@ -261,6 +323,9 @@ public class CameraBoostFX : MonoBehaviour
         _fallFovStart = cam ? cam.fieldOfView : _baseFov;
 
         _lastUp = (up.sqrMagnitude > 1e-6f) ? up.normalized : Vector3.up;
+
+        // stop any charge shake immediately
+        _chargeShakeOutT = chargeShakeFadeOut; // kill tail
     }
 
     public void OnApex(Vector3 up)
@@ -293,6 +358,9 @@ public class CameraBoostFX : MonoBehaviour
             _landFovT = 0f;
             _landFovStart = cam.fieldOfView; // whatever it is at landing
         }
+
+        // ensure no residual shake
+        _chargeShakeOutT = chargeShakeFadeOut;
     }
 
     public void CancelAll()
@@ -304,6 +372,9 @@ public class CameraBoostFX : MonoBehaviour
 
         _lastAppliedOffset = Vector3.zero;
         _postLandT = 0f;
+
+        _chargeShakeTime = 0f;
+        _chargeShakeOutT = chargeShakeFadeOut; // no shake
 
         if (playerCamera) playerCamera.SetExternalCameraOffset(Vector3.zero);
         if (cam) cam.fieldOfView = _baseFov;
@@ -329,6 +400,68 @@ public class CameraBoostFX : MonoBehaviour
         _lastAppliedOffset = Vector3.zero;
         _postLandT = 0f;
 
+        _chargeShakeTime = 0f;
+        _chargeShakeOutT = chargeShakeFadeOut; // no shake initially
+
         if (cam) { _baseFov = cam.fieldOfView; }
+    }
+
+    // ─────────────────────────────────────────────────────
+    // Helpers
+
+    // Returns a small 3D offset for tremble during charging.
+    // Uses Perlin noise so it’s smooth, with fade in/out and respects camera/world space.
+    private Vector3 ComputeChargeShakeOffset(float dt)
+    {
+        // advance time
+        _chargeShakeTime += dt;
+
+        // base amplitude factor from charge progress (more charge = stronger tremble)
+        float chargeFactor = Mathf.Clamp01(_charge01);
+
+        // fade in while charging
+        float fadeIn = (chargeShakeFadeIn <= 0f) ? 1f : Mathf.Clamp01(_chargeShakeTime / Mathf.Max(0.0001f, chargeShakeFadeIn));
+
+        // if we’re no longer in Charging, allow a short fade-out tail
+        float fadeOut = 1f;
+        if (_phase != Phase.Charging && _chargeShakeOutT < chargeShakeFadeOut)
+        {
+            _chargeShakeOutT += dt;
+            float t = Mathf.Clamp01(1f - (_chargeShakeOutT / Mathf.Max(0.0001f, chargeShakeFadeOut)));
+            fadeOut = t;
+        }
+
+        float amp = chargeShakeAmplitude * chargeFactor * fadeIn * fadeOut;
+        if (amp <= 0.00001f) return Vector3.zero;
+
+        // noise time scale
+        float tX = _noiseSeedX + _chargeShakeTime * chargeShakeFrequency;
+        float tY = _noiseSeedY + _chargeShakeTime * chargeShakeFrequency * 1.07f;
+        float tZ = _noiseSeedZ + _chargeShakeTime * chargeShakeFrequency * 0.93f;
+
+        // Perlin gives [0,1]; remap to [-1,1]
+        float nx = Mathf.PerlinNoise(tX, 17.123f) * 2f - 1f;
+        float ny = Mathf.PerlinNoise(tY, 37.456f) * 2f - 1f;
+        float nz = Mathf.PerlinNoise(tZ, 73.789f) * 2f - 1f;
+
+        Vector3 dir = new Vector3(nx, ny, nz);
+
+        // pick a basis: camera space or world space
+        if (chargeShakeInCameraSpace && cam != null)
+        {
+            // camera basis
+            Transform ct = cam.transform;
+            Vector3 offset =
+                ct.right   * dir.x +
+                ct.up      * dir.y +
+                ct.forward * dir.z;
+
+            return offset * amp;
+        }
+        else
+        {
+            // simple world-space shake
+            return dir * amp;
+        }
     }
 }
