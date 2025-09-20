@@ -119,6 +119,8 @@ public class PlayerCamera : MonoBehaviour
     private float _lmbSnapPitch = 0f;              // camera pitch (relative to up) at LMB-down
     private Quaternion _lmbSnapLocalCamRot;        // player-local camera rotation at LMB-down (used in space)
 
+    private Vector3 _externalCamOffsetWS = Vector3.zero;
+
     private void Start()
     {
         // Get component references
@@ -221,6 +223,13 @@ public class PlayerCamera : MonoBehaviour
         // Apply this rotation to the camera
         cam.transform.rotation = targetRotation;
     }
+
+    /// <summary>World-space offset added to the camera each frame (after zoom/orbit, before collision).
+/// Set this every frame (or zero it) from effects like CameraBoostFX.</summary>
+public void SetExternalCameraOffset(Vector3 worldOffset)
+{
+    _externalCamOffsetWS = worldOffset;
+}
 
     public void TransformInputDirection(Vector2 inputAxis, out Vector3 worldMoveDirection)
     {
@@ -681,75 +690,75 @@ private IEnumerator DelayedAutoAlignBehindPlayerRoutine(float idleSeconds, float
 }
 
     private void UpdateCameraPosition()
+{
+    currentZoomDistance = Mathf.Lerp(currentZoomDistance, targetZoomDistance, Time.deltaTime * zoomSmoothing);
+
+    Vector3 zoneUp = (gravityBody != null && gravityBody.IsInSpace)
+        ? -gravityBody.GetEffectiveGravityDirection()
+        : currentGravityZoneUp;
+
+    bool isInSpace = gravityBody != null && gravityBody.IsInSpace;
+
+    if (!isInSpace)
+        _pitchDegrees = Mathf.Clamp(_pitchDegrees, MinPitch, MaxPitch);
+
+    // Calculate final rotation based on current state
+    if (isInSpace && (isPanning || isLeftPanning))
     {
-        currentZoomDistance = Mathf.Lerp(currentZoomDistance, targetZoomDistance, Time.deltaTime * zoomSmoothing);
-
-        Vector3 zoneUp = (gravityBody != null && gravityBody.IsInSpace) ? -gravityBody.GetEffectiveGravityDirection() : currentGravityZoneUp;
-        bool isInSpace = gravityBody != null && gravityBody.IsInSpace;
-
-        if (!isInSpace)
-        {
-            _pitchDegrees = Mathf.Clamp(_pitchDegrees, MinPitch, MaxPitch);
-        }
-
-        // Calculate final rotation based on current state
-        if (isInSpace && (isPanning || isLeftPanning))
-{
-    Quaternion yawRotation   = Quaternion.Euler(0f, _spaceYawDegrees, 0f);
-    Quaternion pitchRotation = Quaternion.Euler(-_spacePitchDegrees, 0f, 0f);
-    finalRotation = yawRotation * pitchRotation;
-}
-else if (isInSpace)
-{
-    finalRotation = cameraTransform.rotation;
-}
-        else
-        {
-            // Normal gravity - calculate rotation from yaw and pitch
-            Vector3 baseForward = Vector3.ProjectOnPlane(Vector3.forward, zoneUp).normalized;
-            if (baseForward.sqrMagnitude < 0.001f)
-            {
-                baseForward = Vector3.ProjectOnPlane(Vector3.right, zoneUp).normalized;
-            }
-
-            // Apply yaw rotation around the gravity up vector
-            Quaternion yawRotation = Quaternion.AngleAxis(_yawDegrees, zoneUp);
-            Vector3 yawForward = yawRotation * baseForward;
-
-            // Apply pitch rotation around the axis perpendicular to both yaw-forward and up
-            Vector3 pitchAxis = Vector3.Cross(yawForward, zoneUp).normalized;
-            Quaternion pitchRotation = Quaternion.AngleAxis(_pitchDegrees, pitchAxis);
-            Vector3 finalForward = pitchRotation * yawForward;
-
-            finalRotation = Quaternion.LookRotation(finalForward, zoneUp);
-        }
-
-        // Position camera based on target and zoom
-        Vector3 localOffset = target.TransformDirection(targetOffset);
-        Vector3 pivotPos = target.position + localOffset;
-        Vector3 zoomDirection = finalRotation * Vector3.back;
-        Vector3 desiredPos = pivotPos + zoomDirection * currentZoomDistance;
-
-        // Calculate horizontal camera forward for movement
-        Vector3 cameraForward = finalRotation * Vector3.forward;
-        cameraForwardHorizontal = Vector3.ProjectOnPlane(cameraForward, zoneUp).normalized;
-
-        // Handle collision
-        desiredPos = HandleCameraCollision(pivotPos, desiredPos);
-
-        // Apply final position and rotation
-        cameraTransform.position = desiredPos;
-        cameraTransform.rotation = finalRotation;
-
-        // Store for next frame
-        _preTransitionCameraForward = cameraTransform.forward;
-
-        // Notify flight system if needed
-if (playerFlight != null && playerFlight.IsFlying)
-{
-    playerFlight.OnCameraPanning(cameraTransform.forward);
-}
+        Quaternion yawRotation   = Quaternion.Euler(0f, _spaceYawDegrees, 0f);
+        Quaternion pitchRotation = Quaternion.Euler(-_spacePitchDegrees, 0f, 0f);
+        finalRotation = yawRotation * pitchRotation;
     }
+    else if (isInSpace)
+    {
+        finalRotation = cameraTransform.rotation;
+    }
+    else
+    {
+        // Normal gravity - calculate rotation from yaw and pitch
+        Vector3 baseForward = Vector3.ProjectOnPlane(Vector3.forward, zoneUp).normalized;
+        if (baseForward.sqrMagnitude < 0.001f)
+            baseForward = Vector3.ProjectOnPlane(Vector3.right, zoneUp).normalized;
+
+        // Apply yaw rotation around the gravity up vector
+        Quaternion yawRotation = Quaternion.AngleAxis(_yawDegrees, zoneUp);
+        Vector3 yawForward = yawRotation * baseForward;
+
+        // Apply pitch rotation around axis perpendicular to both yaw-forward and up
+        Vector3 pitchAxis = Vector3.Cross(yawForward, zoneUp).normalized;
+        Quaternion pitchRotation = Quaternion.AngleAxis(_pitchDegrees, pitchAxis);
+        Vector3 finalForward = pitchRotation * yawForward;
+
+        finalRotation = Quaternion.LookRotation(finalForward, zoneUp);
+    }
+
+    // Position camera based on target and zoom
+    Vector3 localOffset  = target.TransformDirection(targetOffset);
+    Vector3 pivotPos     = target.position + localOffset;
+    Vector3 zoomDirection= finalRotation * Vector3.back;
+    Vector3 desiredPos   = pivotPos + zoomDirection * currentZoomDistance;
+
+    // >>> ADD: Apply external world-space offset from effects (lag, bob, etc.)
+    desiredPos += _externalCamOffsetWS;
+
+    // Calculate horizontal camera forward for movement
+    Vector3 cameraForward = finalRotation * Vector3.forward;
+    cameraForwardHorizontal = Vector3.ProjectOnPlane(cameraForward, zoneUp).normalized;
+
+    // Handle collision with the *offset* included
+    desiredPos = HandleCameraCollision(pivotPos, desiredPos);
+
+    // Apply final position and rotation
+    cameraTransform.position = desiredPos;
+    cameraTransform.rotation = finalRotation;
+
+    // Store for next frame
+    _preTransitionCameraForward = cameraTransform.forward;
+
+    // Notify flight system if needed
+    if (playerFlight != null && playerFlight.IsFlying)
+        playerFlight.OnCameraPanning(cameraTransform.forward);
+}
 
     private void RotateCharacterWithCamera()
     {

@@ -37,7 +37,7 @@ public class PlayerJump : MonoBehaviour
     public  bool IsJumpSuppressed => _jumpSuppressed;
 
     [SerializeField] private PlayerCrouch _playerCrouch;     // to read IsCrouching
-    private JetpackBoostJump _boostJump;                      // present when jetpack is equipped
+    private BoostJump _boostJump;
 
     // Private fields
     private Rigidbody _rigidbody;
@@ -74,7 +74,7 @@ public class PlayerJump : MonoBehaviour
     _gravityBody = GetComponent<GravityBody>();
 
     if (_playerCrouch == null) _playerCrouch = GetComponent<PlayerCrouch>();
-    if (_boostJump == null)    _boostJump    = GetComponentInChildren<JetpackBoostJump>(true);
+    if (_boostJump == null)    _boostJump    = GetComponentInChildren<BoostJump>(true);
     
     // Find player movement script if not assigned
     if (_playerMovement == null)
@@ -107,7 +107,7 @@ public class PlayerJump : MonoBehaviour
 {
     // Ensure we still have a reference to the booster if the jetpack was (un)equiped at runtime
     if (_boostJump == null)
-        _boostJump = GetComponentInChildren<JetpackBoostJump>(true);
+    _boostJump = GetComponentInChildren<BoostJump>(true);
 
     bool isGrounded = _playerMovement.IsGrounded();
 

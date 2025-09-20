@@ -22,6 +22,16 @@ public class PlayerMovement : MonoBehaviour
     [Header("Wall Interaction")]
     [SerializeField] private float _wallCheckDistance = 0.6f;
 
+    [Header("Boost Jump / Charge Integration")]
+    [SerializeField] private float _postBoostMoveLockSeconds = 0.18f; // don't overwrite horizontal right after a boost jump
+    private bool _externalStopMovement = false;                       // hard stop while charging (any system can toggle)
+
+    // --- External horizontal hold (for boost jumps, leaps, etc.) ---
+    [SerializeField] private float _externalHorizHoldDefault = 0.35f; // fallback if caller passes <= 0
+    private bool   _externalHorizontalHeld = false;
+    private float  _externalHorizHoldUntil = 0f;
+    private Vector3 _externalHorizVelocity = Vector3.zero;
+
     // Private references
     private Rigidbody _rigidbody;
     private GravityBody _gravityBody;
@@ -31,7 +41,6 @@ public class PlayerMovement : MonoBehaviour
     private PlayerCamera _playerCamera;
     private float _lastJumpTime = -10f; // Track when the last jump occurred
     private PlayerDash _playerDash;
-    private bool _externalStopMovement = false;
 
     // Movement state
     private Vector3 _lastFrameVelocity;
@@ -272,35 +281,96 @@ public class PlayerMovement : MonoBehaviour
 
     private void ApplyMovement()
 {
-    // Skip movement during dash
+    // Skip during dash
     if (_playerDash != null && _playerDash.IsDashing())
         return;
 
-    // NEW: hard stop requested by external system (jetpack charge)
+    // Respect a hard external stop (e.g., while charging a boost jump)
     if (_externalStopMovement)
         return;
 
+    // ─────────────────────────────────────────────────────────────
+    // External horizontal hold (preserve a provided horizontal velocity)
+    // Requires these fields in the class:
+    // [SerializeField] private float _externalHorizHoldDefault = 0.35f;
+    // private bool _externalHorizontalHeld;
+    // private float _externalHorizHoldUntil;
+    // private Vector3 _externalHorizVelocity;
+    // ─────────────────────────────────────────────────────────────
+    bool externalHoldActive = false;
+    if (_externalHorizontalHeld)
+    {
+        if (Time.time >= _externalHorizHoldUntil || _externalHorizVelocity.sqrMagnitude <= 0.0001f)
+        {
+            _externalHorizontalHeld = false;
+            _externalHorizVelocity = Vector3.zero;
+        }
+        else
+        {
+            externalHoldActive = true;
+        }
+    }
+
+    if (externalHoldActive)
+    {
+        Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
+        Vector3 v = _rigidbody.velocity;
+        Vector3 vertical = Vector3.Project(v, gravityDir);
+
+        // Enforce the preserved horizontal exactly (do not let run-speed overwrite it)
+        _rigidbody.velocity = vertical + _externalHorizVelocity;
+
+        // Optional: face travel direction while the hold is active
+        if (_externalHorizVelocity.sqrMagnitude > 0.01f)
+        {
+            Quaternion face = Quaternion.LookRotation(_externalHorizVelocity.normalized, -gravityDir);
+            _rigidbody.rotation = Quaternion.Slerp(_rigidbody.rotation, face, Time.fixedDeltaTime * _runningTurnSpeed);
+        }
+        return; // do NOT run normal movement while hold is active
+    }
+
+    // Legacy post-boost lock window (kept for safety, can be removed if using the hold everywhere)
+    float sinceJump = Time.time - _lastJumpTime;
+    bool inPostBoostLock = sinceJump >= 0f && sinceJump < _postBoostMoveLockSeconds;
+    if (inPostBoostLock)
+    {
+        // Optional: still turn towards input while preserving the boost velocity
+        if (_worldMoveDirection.magnitude > 0.1f)
+        {
+            Quaternion targetRotation = Quaternion.LookRotation(
+                _worldMoveDirection,
+                _gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up
+            );
+            _rigidbody.rotation = Quaternion.Slerp(_rigidbody.rotation, targetRotation, Time.fixedDeltaTime * _runningTurnSpeed);
+        }
+        return; // don't overwrite horizontal during this short window
+    }
+
+    // If no move input, nothing to do
     if (_worldMoveDirection.magnitude < 0.1f)
         return;
 
+    // Normal movement (ground or air) AFTER the hold/window
     float currentSpeed = GetCurrentMoveSpeed();
     Vector3 targetVelocity = _worldMoveDirection * currentSpeed;
 
+    // Snap horizontal towards target each step
     _rigidbody.AddForce(targetVelocity - GetHorizontalVelocity(), ForceMode.VelocityChange);
 
-    if (_worldMoveDirection.magnitude > 0.1f)
-    {
-        float turnSpeed = _runningTurnSpeed;
-        Quaternion targetRotation = Quaternion.LookRotation(
-            _worldMoveDirection,
-            _gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up
-        );
-        _rigidbody.rotation = Quaternion.Slerp(_rigidbody.rotation, targetRotation, Time.fixedDeltaTime * turnSpeed);
-    }
+    // Face movement
+    Quaternion faceMove = Quaternion.LookRotation(
+        _worldMoveDirection,
+        _gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up
+    );
+    _rigidbody.rotation = Quaternion.Slerp(_rigidbody.rotation, faceMove, Time.fixedDeltaTime * _runningTurnSpeed);
 }
+
 
     private void ApplyFriction()
     {
+        if (IsExternalHorizHoldActive())
+        return;
+
         // FIXED: Also skip friction during dash to avoid interfering with dash physics
         if (_playerDash != null && _playerDash.IsDashing())
             return;
@@ -354,21 +424,14 @@ public class PlayerMovement : MonoBehaviour
 
     _animator.SetBool("isGrounded", _isGrounded);
 
-    // If an external stop is active (jetpack charge), force idle regardless of input.
-    bool effectiveHasInput = !_externalStopMovement && _hasMovementInput;
-    _animator.SetBool("isRunning", effectiveHasInput);
+    // While externally stopped (charging) or inside the post-boost lock, don't report "running"
+    bool inPostBoostLock = (Time.time - _lastJumpTime) < _postBoostMoveLockSeconds;
+    bool running = _hasMovementInput && !_externalStopMovement && !inPostBoostLock;
+    _animator.SetBool("isRunning", running);
 
-    // Move speed param: zero while externally stopped, else normal normalized speed
-    if (_externalStopMovement)
-    {
-        _animator.SetFloat("moveSpeed", 0f);
-    }
-    else
-    {
-        float horizontalSpeed = GetHorizontalVelocity().magnitude;
-        float currentMaxSpeed = GetCurrentMoveSpeed();
-        _animator.SetFloat("moveSpeed", horizontalSpeed / currentMaxSpeed);
-    }
+    float horizontalSpeed = GetHorizontalVelocity().magnitude;
+    float currentMaxSpeed = GetCurrentMoveSpeed();
+    _animator.SetFloat("moveSpeed", horizontalSpeed / currentMaxSpeed);
 }
 
     // Map input using the axes captured at LMB-pan start (so camera free-look doesn't affect movement)
@@ -422,6 +485,15 @@ private void CalculateMoveDirectionLocked(float horizontal, float vertical)
     public void SetExternalStopMovement(bool on)
 {
     _externalStopMovement = on;
+
+    if (on && _rigidbody != null)
+    {
+        // Zero horizontal immediately so we actually stand still this frame.
+        Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
+        Vector3 v = _rigidbody.velocity;
+        Vector3 vertical = Vector3.Project(v, gravityDir);
+        _rigidbody.velocity = vertical; // keep vertical, kill horizontal
+    }
 }
 
     public void RemoveSpeedModifier(float modifier)
@@ -429,6 +501,44 @@ private void CalculateMoveDirectionLocked(float horizontal, float vertical)
         _speedModifiers.Remove(modifier);
         Debug.Log($"Removed speed modifier: -{modifier}. New speed: {GetCurrentMoveSpeed()}");
     }
+
+/// <summary>
+/// Preserve this horizontal (gravity-plane) velocity for 'seconds'.
+/// While active, ApplyMovement and friction won't overwrite horizontal,
+/// only vertical is allowed to change (gravity/jumps).
+/// </summary>
+public void HoldExternalHorizontal(Vector3 worldHorizontalVelocity, float seconds)
+{
+    // Project to horizontal just in case caller passes any vertical
+    Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
+    _externalHorizVelocity = Vector3.ProjectOnPlane(worldHorizontalVelocity, gravityDir);
+
+    float dur = seconds > 0f ? seconds : _externalHorizHoldDefault;
+    _externalHorizontalHeld = _externalHorizVelocity.sqrMagnitude > 0.0001f && dur > 0f;
+    _externalHorizHoldUntil = Time.time + dur;
+}
+
+/// <summary>
+/// Immediately end any active external horizontal hold.
+/// </summary>
+public void CancelExternalHorizontalHold()
+{
+    _externalHorizontalHeld = false;
+    _externalHorizVelocity  = Vector3.zero;
+    _externalHorizHoldUntil = 0f;
+}
+
+private bool IsExternalHorizHoldActive()
+{
+    if (!_externalHorizontalHeld) return false;
+    if (Time.time >= _externalHorizHoldUntil)
+    {
+        _externalHorizontalHeld = false;
+        _externalHorizVelocity = Vector3.zero;
+        return false;
+    }
+    return true;
+}
 
     public float GetCurrentMoveSpeed()
     {

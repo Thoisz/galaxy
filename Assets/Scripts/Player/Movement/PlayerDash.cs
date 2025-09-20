@@ -18,6 +18,7 @@ public class PlayerDash : MonoBehaviour
     [SerializeField] private float _dashBufferTime = 0.1f;
     [SerializeField] private float _dashSlowdownDuration = 0.05f;
     [SerializeField] private float _dashSlowdownSpeedMultiplier = 0.3f;
+    [SerializeField] private bool _dashSuppressed = false;
     
     [Header("Input Settings")]
     [SerializeField] private KeyCode _dashKey = KeyCode.LeftShift;
@@ -101,38 +102,33 @@ public class PlayerDash : MonoBehaviour
 {
     // Cache mouse button state once per frame
     bool currentRightMousePressed = Input.GetMouseButton(1);
-    
+
     // Check if right mouse was released during dash
     if (_isDashing && _isRightMousePressed && !currentRightMousePressed)
     {
         if (_playerCamera != null)
-        {
             _playerCamera.ReleaseExternalPanControl();
-        }
     }
-    
     _isRightMousePressed = currentRightMousePressed;
-    
-    // Check for dash input
+
+    // Check for dash input (blocked if suppressed)
     if (Input.GetKeyDown(_dashKey))
     {
-        if (_canDash && !_isDashing)
+        if (!_dashSuppressed && _canDash && !_isDashing)
         {
-            // Normal dash start
             StartDash();
         }
-        else if (_isDashing && CanBufferDash())
+        else if (!_dashSuppressed && _isDashing && CanBufferDash())
         {
-            // Buffer the dash input
             BufferDash();
         }
     }
-    
-    // Update animation parameters - ADDED: Update both trigger and boolean
+
+    // Update animation parameters
     if (_animator != null)
     {
-        _animator.SetBool("dash", _isDashing); // Keep existing boolean (this was already here)
-        _animator.SetBool("isDashing", _isDashing); // Add new boolean
+        _animator.SetBool("dash", _isDashing);
+        _animator.SetBool("isDashing", _isDashing);
         _animator.SetBool("dashEnd", !_isDashing);
     }
 }
@@ -850,6 +846,14 @@ private void BufferDash()
         _animator.SetBool("dashEnd", true);
         _animator.SetBool("dashInstant", false);
     }
+}
+
+public void SetDashSuppressed(bool on)
+{
+    // simple external gate used by BoostJump
+    _dashSuppressed = on;
+    if (on && _isDashing)
+        EndDashEarly();
 }
 
     public void EndDashEarly()

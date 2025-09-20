@@ -10295,14 +10295,17 @@ MonoBehaviour:
   playerCrouch: {fileID: 0}
   playerMovement: {fileID: 0}
   playerJump: {fileID: 0}
+  lockFlight: 1
   triggerKey: 32
-  minChargeTimeSeconds: 0.2
-  chargeTimeSeconds: 3
-  minLaunchVelocity: 15
-  maxLaunchVelocity: 150
-  forwardUpRatio: 20
+  minChargeTimeSeconds: 0.3
+  chargeTimeSeconds: 2
+  minLaunchVertical: 10
+  maxLaunchVertical: 100
+  minLaunchHorizontal: 4
+  maxLaunchHorizontal: 40
+  requireMovementInputForHorizontal: 1
   chargeFovIncrease: 4
-  launchFovIncrease: 10
+  launchFovIncrease: 25
   fovLerpUpSpeed: 10
   fovLerpDownSpeed: 4.5
   groundCheckRadius: 0.25
@@ -10310,11 +10313,47 @@ MonoBehaviour:
   groundMask:
     serializedVersion: 2
     m_Bits: 9
-  requireFuel: 1
+  requireFuel: 0
   fuelCost: 25
-  fuelSource: {fileID: 5902123412614881050}
+  fuelSource: {fileID: 0}
   fuelHasMethod: HasFuel
   fuelConsumeMethod: ConsumeFuel
+  extraFallAcceleration: 1
+  fallAccelMax: 25
+  fallAccelRampTime: 8
+  fallAccelCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 1.0813302
+      value: 0.028117895
+      inSlope: 0.011098765
+      outSlope: 0.011098765
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.19491339
+      outWeight: 0.57322127
+    - serializedVersion: 3
+      time: 1.0916748
+      value: 1
+      inSlope: 3.18396
+      outSlope: 3.18396
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.03333336
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
 --- !u!1 &4596540419969368912
 GameObject:
   m_ObjectHideFlags: 0
