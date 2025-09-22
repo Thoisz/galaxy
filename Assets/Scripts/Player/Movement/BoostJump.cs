@@ -465,25 +465,32 @@ public class BoostJump : MonoBehaviour
     }
 
     void SpawnGroundbreak()
+{
+    if (fxGroundbreakPrefab == null || playerBody == null) return;
+
+    Vector3 up  = GetUp();
+    Vector3 pos = playerBody.position; // let the root do the precise snap with a ray
+    Quaternion rot = Quaternion.identity;
+
+    var fx = Instantiate(fxGroundbreakPrefab, pos, rot);
+
+    // Hand off to the prefab so it can raycast down, align to ground normal,
+    // and inherit the ground material (all inside GroundbreakFXRoot).
+    var root = fx.GetComponent<GroundbreakFXRoot>();
+    if (root != null)
     {
-        if (fxGroundbreakPrefab == null || playerBody == null) return;
-
-        Vector3 up = GetUp();
-        Vector3 pos = playerBody.position + (-up) * 0.05f; // slight sink to avoid floating
-        Quaternion rot = Quaternion.LookRotation(Vector3.ProjectOnPlane(transform.forward, up).normalized + 0.0001f * Vector3.forward, up);
-
-        var fx = Instantiate(fxGroundbreakPrefab, pos, rot);
-
-        // Find the slabs script in the spawned hierarchy
-        var slabs = fx.GetComponentInChildren<SlabRingSimpleFX>(true);
-        if (slabs != null)
-        {
-            // Fetch ground material and apply
-            var mat = GetGroundMaterialUnderPlayer(playerBody.position, up);
-            if (mat != null)
-                slabs.ApplyMaterial(mat);
-        }
+        // Optional: expose a bool on the root to turn on logs in the Inspector
+        root.ConfigureFromContact(playerBody.position, up);
     }
+    else
+    {
+        // Fallback: if the prefab somehow lacks GroundbreakFXRoot, do a minimal place
+        // so you still see *something* (but no material inheritance/alignment).
+        fx.transform.position = playerBody.position - up * 0.05f;
+        fx.transform.rotation = Quaternion.LookRotation(
+            Vector3.ProjectOnPlane(transform.forward, up).normalized + 0.0001f * Vector3.forward, up);
+    }
+}
 
     Material GetGroundMaterialUnderPlayer(Vector3 origin, Vector3 up, float rayLen = 3f)
     {

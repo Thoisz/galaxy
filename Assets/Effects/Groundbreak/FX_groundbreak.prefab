@@ -55,10 +55,14 @@ MonoBehaviour:
   slabMaterialIndex: -1
   groundMask:
     serializedVersion: 2
-    m_Bits: 4294967295
+    m_Bits: 9
   rayDownDistance: 6
   rayStartUpOffset: 0.5
   debugLogs: 1
+  rubbleParticles:
+  - {fileID: 4331294147276868665}
+  rubbleRenderers: []
+  rubbleAffectsMaterialColor: 1
 --- !u!1 &6806943542192073473
 GameObject:
   m_ObjectHideFlags: 0

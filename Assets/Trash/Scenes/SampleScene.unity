@@ -5402,7 +5402,7 @@ MonoBehaviour:
   m_HandleRect: {fileID: 66724682}
   m_Direction: 0
   m_Value: 1
-  m_Size: 1
+  m_Size: 0.9999999
   m_NumberOfSteps: 0
   m_OnValueChanged:
     m_PersistentCalls:
@@ -5687,15 +5687,15 @@ PrefabInstance:
       objectReference: {fileID: 2100000, guid: 41879754fd0b9f544857c107fa7794e7, type: 2}
     - target: {fileID: -8679921383154817045, guid: a08c38ed7718db848a9d0f505705178e, type: 3}
       propertyPath: m_LocalScale.x
-      value: 250
+      value: 300
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: a08c38ed7718db848a9d0f505705178e, type: 3}
       propertyPath: m_LocalScale.y
-      value: 250
+      value: 300
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: a08c38ed7718db848a9d0f505705178e, type: 3}
       propertyPath: m_LocalScale.z
-      value: 250
+      value: 300
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: a08c38ed7718db848a9d0f505705178e, type: 3}
       propertyPath: m_LocalPosition.x
@@ -8988,7 +8988,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   playerCamera: {fileID: 1019612833}
   cam: {fileID: 2143382786}
-  ascentLagMax: 4
+  ascentLagMax: 7
   ascentCatchupTime: 1.2
   ascentLagCurve:
     serializedVersion: 2
@@ -21835,7 +21835,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 6265722719188863780, guid: f39991892847afc45ba8bd01ad2057a7, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 2601.825
+      value: 2625.33
       objectReference: {fileID: 0}
     - target: {fileID: 6265722719188863780, guid: f39991892847afc45ba8bd01ad2057a7, type: 3}
       propertyPath: m_LocalPosition.z
