@@ -10345,6 +10345,8 @@ MonoBehaviour:
   speedlines: {fileID: 0}
   speedlinesLookOffsetEuler: {x: -90, y: 0, z: 0}
   speedlinesMatchCameraRoll: 1
+  fxGroundbreakPrefab: {fileID: 2270631553756576779, guid: bb370855c4f9c7644ad99aebb3f9e265, type: 3}
+  tryResourcesLoad: 1
 --- !u!1 &4596540419969368912
 GameObject:
   m_ObjectHideFlags: 0

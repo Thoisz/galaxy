@@ -12,84 +12,131 @@ public class CameraBoostFX : MonoBehaviour
     // POSITIONAL LAG
 
     [Header("Ascent lag")]
-    [Tooltip("Meters to lag opposite to Up immediately after launch.")]
-    [SerializeField] private float ascentLagMax = 3f;
+    [SerializeField, Tooltip("Meters to lag opposite to Up immediately after launch.")]
+    private float ascentLagMax = 3f;
 
-    [Tooltip("Seconds to fade the ascent lag to 0 (usually around apex).")]
-    [SerializeField] private float ascentCatchupTime = 0.35f;
+    [SerializeField, Tooltip("Seconds to fade the ascent lag to 0 (usually around apex).")]
+    private float ascentCatchupTime = 0.35f;
 
-    [Tooltip("Curve time=0..1 → scale 1..0; recommend start near 1 and end at 0.\nX=t/ascentCatchupTime, Y=lag scale.")]
-    [SerializeField] private AnimationCurve ascentLagCurve = AnimationCurve.Linear(0, 1, 1, 0);
+    [SerializeField, Tooltip("Curve time=0..1 → scale 1..0;\nX=t/ascentCatchupTime, Y=lag scale.")]
+    private AnimationCurve ascentLagCurve = AnimationCurve.Linear(0, 1, 1, 0);
 
     [Header("Fall lag")]
-    [Tooltip("Meters to pull the camera downward while falling (ramps in over time).")]
-    [SerializeField] private float fallLagMax = 4f;
+    [SerializeField, Tooltip("Meters to pull the camera downward while falling (ramps in over time).")]
+    private float fallLagMax = 4f;
 
-    [Tooltip("Seconds to ramp fall lag from 0 → 1.")]
-    [SerializeField] private float fallLagRamp = 0.6f;
+    [SerializeField, Tooltip("Seconds to ramp fall lag from 0 → 1.")]
+    private float fallLagRamp = 0.6f;
 
-    [Tooltip("Curve time=0..1 → scale 0..1; recommend ease-in.\nX=t/fallLagRamp, Y=lag scale.")]
-    [SerializeField] private AnimationCurve fallLagCurve = AnimationCurve.EaseInOut(0, 0, 1, 1);
+    [SerializeField, Tooltip("Curve time=0..1 → scale 0..1;\nX=t/fallLagRamp, Y=lag scale.")]
+    private AnimationCurve fallLagCurve = AnimationCurve.EaseInOut(0, 0, 1, 1);
 
     [Header("Post-landing lag catch-up")]
-    [Tooltip("Seconds to ease any remaining lag back to zero after landing.")]
-    [SerializeField] private float postLandCatchupTime = 0.35f;
+    [SerializeField, Tooltip("Seconds to ease any remaining lag back to zero after landing.")]
+    private float postLandCatchupTime = 0.35f;
 
-    [Tooltip("Curve time=0..1 → scale 1..0 for post-landing offset fade.")]
-    [SerializeField] private AnimationCurve postLandCurve = AnimationCurve.Linear(0, 1, 1, 0);
+    [SerializeField, Tooltip("Curve time=0..1 → scale 1..0 for post-landing offset fade.")]
+    private AnimationCurve postLandCurve = AnimationCurve.Linear(0, 1, 1, 0);
 
     // ─────────────────────────────────────────────────────
     // FOV
 
     [Header("FOV (Charging/Ascent)")]
-    [Tooltip("Extra FOV (usually negative) while charging, scaled by charge 0..1.")]
-    [SerializeField] private float chargeFovDelta = -6f;
+    [SerializeField, Tooltip("Extra FOV (usually negative) while charging, scaled by charge 0..1.")]
+    private float chargeFovDelta = -6f;
 
-    [Tooltip("Extra FOV during ascent (constant while ascending).")]
-    [SerializeField] private float launchFovDelta = 10f;
+    [SerializeField, Tooltip("Extra FOV during ascent (constant while ascending).")]
+    private float launchFovDelta = 10f;
 
     [Header("FOV (Falling → absolute target)")]
-    [Tooltip("Absolute FOV the camera should reach by the end of the fall.\nExample: 95 means \"go to 95° over Fall FOV Time\".")]
-    [SerializeField] private float fallFovTarget = 95f;
+    [SerializeField, Tooltip("Absolute FOV to reach by end of fall, e.g. 95°.")]
+    private float fallFovTarget = 95f;
 
-    [Tooltip("Seconds to move from the apex FOV to the Fall FOV Target.")]
-    [SerializeField] private float fallFovTime = 0.6f;
+    [SerializeField, Tooltip("Seconds to move from the apex FOV to the Fall FOV Target.")]
+    private float fallFovTime = 0.6f;
 
-    [Tooltip("Curve for fall FOV blend: X = normalized time 0..1, Y = blend 0..1.\nY=0 keeps apex FOV; Y=1 is the Fall FOV Target.")]
-    [SerializeField] private AnimationCurve fallFovCurve = AnimationCurve.EaseInOut(0, 0, 1, 1);
+    [SerializeField, Tooltip("Curve 0..1 for fall FOV blend (apex→target).")]
+    private AnimationCurve fallFovCurve = AnimationCurve.EaseInOut(0, 0, 1, 1);
 
     [Header("Landing FOV Return")]
-    [Tooltip("Seconds to ease FOV back to base after landing.")]
-    [SerializeField] private float landFovReturnTime = 0.6f;
+    [SerializeField, Tooltip("Seconds to ease FOV back to base after landing.")]
+    private float landFovReturnTime = 0.6f;
 
-    [Tooltip("Curve time=0..1 for landing FOV return. If null, linear.")]
-    [SerializeField] private AnimationCurve landFovCurve = null;
+    [SerializeField, Tooltip("Curve time=0..1 for landing FOV return. If null, linear.")]
+    private AnimationCurve landFovCurve = null;
 
     [Header("FOV Lerp Rates (non-landing)")]
-    [Tooltip("Lerp rate toward target FOV when effects engage (charging/ascending).")]
-    [SerializeField] private float fovLerpUp = 12f;
+    [SerializeField, Tooltip("Lerp rate toward target FOV when effects engage (charging/ascending).")]
+    private float fovLerpUp = 12f;
 
-    [Tooltip("Lerp rate back to base FOV when effects end (idle).")]
-    [SerializeField] private float fovLerpDown = 6f;
+    [SerializeField, Tooltip("Lerp rate back to base FOV when effects end (idle).")]
+    private float fovLerpDown = 6f;
 
     // ─────────────────────────────────────────────────────
-    // CHARGE TREMBLE (Perlin shake)
+    // EDGE BLUR (Renderer Feature)
 
-    [Header("Charge tremble (camera shake while charging)")]
-    [Tooltip("Peak shake amplitude in meters (applied as camera offset).")]
-    [SerializeField] private float chargeShakeAmplitude = 0.15f;
+    [Header("Edge Blur – Intensity")]
+    [SerializeField, Tooltip("Max edge-blur during CHARGE (ignored if you keep charge blur off).")]
+    private float chargeBlurMax = 0.5f;
+    [SerializeField, Tooltip("Curve vs. charge 0..1 for CHARGE blur.")]
+    private AnimationCurve chargeBlurCurve = AnimationCurve.Linear(0, 0, 1, 1);
 
-    [Tooltip("Shake frequency in Hz (how fast the noise wiggles).")]
-    [SerializeField] private float chargeShakeFrequency = 18f;
+    [SerializeField, Tooltip("Fixed edge-blur while ASCENDING (often a small value).")]
+    private float ascentBlur = 0.25f;
 
-    [Tooltip("Seconds for shake to fade in after Charge begins.")]
-    [SerializeField] private float chargeShakeFadeIn = 0.12f;
+    [SerializeField, Tooltip("Max edge-blur reached at end of FALL.")]
+    private float fallBlurMax = 0.8f;
+    [SerializeField, Tooltip("Seconds to ramp fall blur from apex → max.")]
+    private float fallBlurTime = 0.6f;
+    [SerializeField, Tooltip("Curve 0..1 over fallBlurTime.")]
+    private AnimationCurve fallBlurCurve = AnimationCurve.EaseInOut(0, 0, 1, 1);
 
-    [Tooltip("Seconds for shake to fade out when Charge ends/cancels.")]
-    [SerializeField] private float chargeShakeFadeOut = 0.18f;
+    [SerializeField, Tooltip("Seconds to fade blur back to 0 after landing.")]
+    private float landBlurReturnTime = 0.5f;
+    [SerializeField, Tooltip("Curve 0..1 for landing blur fade.")]
+    private AnimationCurve landBlurCurve = AnimationCurve.EaseInOut(0, 1, 1, 0);
 
-    [Tooltip("If ON, shake axes are camera-space (Right/Up/Forward). If OFF, world-space.")]
-    [SerializeField] private bool chargeShakeInCameraSpace = true;
+    [Header("Edge Blur – Radius")]
+    [SerializeField, Range(0f,1f), Tooltip("Inner radius while charging/ascent.")]
+    private float chargeInner = 0.55f;
+    [SerializeField, Range(0f,1f), Tooltip("Outer radius while charging/ascent.")]
+    private float chargeOuter = 0.95f;
+
+    [SerializeField, Range(0f,1f), Tooltip("Inner radius while falling.")]
+    private float fallInner = 0.5f;
+    [SerializeField, Range(0f,1f), Tooltip("Outer radius while falling.")]
+    private float fallOuter = 0.98f;
+
+    [Header("Edge Blur – Quality")]
+    [SerializeField, Range(1,16), Tooltip("Blur sample count (performance).")]
+    private int blurSamples = 8;
+    [SerializeField, Min(0.001f), Tooltip("Blur spread (pixels-ish).")]
+    private float blurSpread = 1.5f;
+
+    // Shader property IDs (globals)
+    static readonly int ID_Intensity = Shader.PropertyToID("_EdgeBlurIntensity");
+    static readonly int ID_Inner     = Shader.PropertyToID("_EdgeBlurInner");
+    static readonly int ID_Outer     = Shader.PropertyToID("_EdgeBlurOuter");
+    static readonly int ID_Spread    = Shader.PropertyToID("_EdgeBlurSpread");
+    static readonly int ID_Samples   = Shader.PropertyToID("_EdgeBlurSamples");
+
+    // ─────────────────────────────────────────────────────
+    // CHARGE TREMBLE (camera shake while charging)
+
+    [Header("Charge Tremble")]
+    [SerializeField, Tooltip("Meters of positional jitter while charging (local to camera axes).")]
+    private float chargeShakeAmplitude = 0.05f;
+    [SerializeField, Tooltip("Jitter frequency (Hz).")]
+    private float chargeShakeFrequency = 12f;
+    [SerializeField, Tooltip("Axis weights (x=right, y=up, z=forward).")]
+    private Vector3 chargeShakeAxes = new Vector3(0.6f, 1f, 0.3f);
+    [SerializeField, Tooltip("How quickly the shake offset smooths (bigger = snappier).")]
+    private float chargeShakeDamping = 20f;
+    [SerializeField, Tooltip("Scale shake by charge amount (0..1).")]
+    private bool chargeShakeScaleByCharge = true;
+
+    // seeds so noise channels are decorrelated
+    private Vector3 _shakeSeed;
 
     // ── runtime state ──
     private enum Phase { Idle, Charging, Ascending, Falling }
@@ -111,16 +158,23 @@ public class CameraBoostFX : MonoBehaviour
     private float _landFovT = 0f;
     private float _landFovStart = 60f; // filled at landing
 
+    // landing BLUR tween
+    private bool  _landBlurActive = false;
+    private float _landBlurT = 0f;
+    private float _landBlurStart = 0f;
+
+    // fall BLUR timer
+    private float _fallBlurT = 0f;
+
     private Vector3 _lastUp = Vector3.up;
 
-    // offset management
-    private Vector3 _lastAppliedOffset = Vector3.zero; // what we gave PlayerCamera last frame
+    // offsets
+    private Vector3 _lastAppliedOffset = Vector3.zero; // lag
+    private Vector3 _chargeShakeOffset = Vector3.zero; // tremble
     private float   _postLandT = 0f;                   // timer for landing offset fade
 
-    // charge shake runtime
-    private float _chargeShakeTime = 0f;
-    private float _chargeShakeOutT = 0f; // time into fade out
-    private float _noiseSeedX, _noiseSeedY, _noiseSeedZ;
+    // blur bookkeeping
+    float _currentBlurIntensity = 0f;
 
     private void Awake()
     {
@@ -136,11 +190,17 @@ public class CameraBoostFX : MonoBehaviour
             postLandCurve = AnimationCurve.Linear(0, 1, 1, 0);
         if (fallFovCurve == null || fallFovCurve.length == 0)
             fallFovCurve = AnimationCurve.EaseInOut(0, 0, 1, 1);
+        if (landBlurCurve == null || landBlurCurve.length == 0)
+            landBlurCurve = AnimationCurve.EaseInOut(0, 1, 1, 0);
+        if (chargeBlurCurve == null || chargeBlurCurve.length == 0)
+            chargeBlurCurve = AnimationCurve.Linear(0, 0, 1, 1);
 
-        // initialize shake seeds so each play session is a bit different
-        _noiseSeedX = Random.Range(0f, 1000f);
-        _noiseSeedY = Random.Range(0f, 1000f);
-        _noiseSeedZ = Random.Range(0f, 1000f);
+        // randomize shake seeds
+        _shakeSeed = new Vector3(
+            Random.Range(0.1f, 1000f),
+            Random.Range(0.1f, 1000f),
+            Random.Range(0.1f, 1000f)
+        );
     }
 
     private void OnEnable()
@@ -154,12 +214,17 @@ public class CameraBoostFX : MonoBehaviour
         if (playerCamera) playerCamera.SetExternalCameraOffset(Vector3.zero);
         if (cam) cam.fieldOfView = _baseFov;
         _phase = Phase.Idle;
-        _landFovActive = false;
+        _landFovActive  = false;
+        _landBlurActive = false;
+
+        // zero out blur globals
+        PushEdgeBlurGlobals(0f, chargeInner, chargeOuter);
     }
 
     private void Update()
     {
-        // Landing FOV tween overrides normal target logic while active
+        // --- FOV ---
+
         if (_landFovActive && cam)
         {
             _landFovT += Time.deltaTime / Mathf.Max(0.0001f, landFovReturnTime);
@@ -168,90 +233,137 @@ public class CameraBoostFX : MonoBehaviour
             cam.fieldOfView = Mathf.Lerp(_landFovStart, _baseFov, eased);
 
             if (_landFovT >= 1f) _landFovActive = false;
-            return;
         }
-
-        // ── Phase-based FOV (charging / ascent / fall / idle) ──
-        switch (_phase)
+        else
         {
-            case Phase.Charging:
-                _targetFov = _baseFov + chargeFovDelta * Mathf.Clamp01(_charge01);
-                break;
-
-            case Phase.Ascending:
-                _targetFov = _baseFov + launchFovDelta; // constant while ascending
-                break;
-
-            case Phase.Falling:
+            switch (_phase)
             {
-                if (!cam) return;
+                case Phase.Charging:
+                    _targetFov = _baseFov + chargeFovDelta * Mathf.Clamp01(_charge01);
+                    break;
 
-                // Progress time 0..1 over fallFovTime
-                _fallFovT += Time.deltaTime / Mathf.Max(0.0001f, fallFovTime);
-                float t = Mathf.Clamp01(_fallFovT);
+                case Phase.Ascending:
+                    _targetFov = _baseFov + launchFovDelta; // constant while ascending
+                    break;
 
-                // Evaluate curve 0..1 (clamped) and lerp from exact apex FOV to absolute fall target
-                float k = Mathf.Clamp01(fallFovCurve.Evaluate(t));
-                cam.fieldOfView = Mathf.Lerp(_fallFovStart, fallFovTarget, k);
+                case Phase.Falling:
+                {
+                    if (cam)
+                    {
+                        // progress apex → target over fallFovTime
+                        _fallFovT += Time.deltaTime / Mathf.Max(0.0001f, fallFovTime);
+                        float t = Mathf.Clamp01(_fallFovT);
+                        float k = Mathf.Clamp01(fallFovCurve.Evaluate(t));
+                        cam.fieldOfView = Mathf.Lerp(_fallFovStart, fallFovTarget, k);
+                        // falling sets FOV directly this frame
+                        goto AfterFov;
+                    }
+                    break;
+                }
 
-                return; // Falling drives FOV directly this frame
+                default:
+                    _targetFov = _baseFov;
+                    break;
             }
 
-            default: // Idle
-                _targetFov = _baseFov;
-                break;
+            if (cam)
+            {
+                float rate = (_phase == Phase.Idle) ? fovLerpDown : fovLerpUp;
+                cam.fieldOfView = Mathf.Lerp(cam.fieldOfView, _targetFov, Time.deltaTime * Mathf.Max(0f, rate));
+            }
         }
 
-        if (cam)
+    AfterFov:
+
+        // --- EDGE BLUR ---
+        // Requirement: no blur while charging. Blur during whole jump (ascent + fall). Fade on land.
+
+        float intensity = 0f;
+        float inner = chargeInner, outer = chargeOuter;
+
+        if (_landBlurActive)
         {
-            float rate = (_phase == Phase.Idle) ? fovLerpDown : fovLerpUp;
-            cam.fieldOfView = Mathf.Lerp(cam.fieldOfView, _targetFov, Time.deltaTime * Mathf.Max(0f, rate));
+            _landBlurT += Time.deltaTime / Mathf.Max(0.0001f, landBlurReturnTime);
+            float t = Mathf.Clamp01(_landBlurT);
+            float fade = (landBlurCurve != null) ? Mathf.Clamp01(landBlurCurve.Evaluate(t)) : t;
+            intensity = Mathf.Lerp(_landBlurStart, 0f, fade);
+            inner = chargeInner; outer = chargeOuter; // consistent radii during fade
+
+            if (_landBlurT >= 1f) _landBlurActive = false;
         }
+        else
+        {
+            switch (_phase)
+            {
+                case Phase.Charging:
+                    // INTENTIONALLY DISABLED DURING CHARGE
+                    intensity = 0f;
+                    inner = chargeInner; outer = chargeOuter;
+                    break;
+
+                case Phase.Ascending:
+                    // Constant light blur while ascending
+                    intensity = Mathf.Max(0f, ascentBlur);
+                    inner = chargeInner; outer = chargeOuter;
+                    break;
+
+                case Phase.Falling:
+                    // Ramp blur across the fall
+                    _fallBlurT += Time.deltaTime / Mathf.Max(0.0001f, fallBlurTime);
+                    {
+                        float bt = Mathf.Clamp01(_fallBlurT);
+                        float k  = (fallBlurCurve != null) ? Mathf.Clamp01(fallBlurCurve.Evaluate(bt)) : bt;
+                        intensity = k * Mathf.Max(0f, fallBlurMax);
+                        inner = fallInner; outer = fallOuter;
+                    }
+                    break;
+
+                default:
+                    intensity = 0f;
+                    inner = chargeInner; outer = chargeOuter;
+                    break;
+            }
+        }
+
+        PushEdgeBlurGlobals(intensity, inner, outer);
     }
 
     private void LateUpdate()
     {
         if (playerCamera == null) return;
 
-        // Keep a fresh 'up' from PlayerCamera
+        // Fresh gravity up
         _lastUp = playerCamera.GetCurrentGravityUp();
         if (_lastUp.sqrMagnitude < 1e-6f) _lastUp = Vector3.up;
 
-        Vector3 newOffset = Vector3.zero;
+        // Compute positional lag offset (ascent/fall) or post-land fade
+        Vector3 lagOffset = Vector3.zero;
 
         if (_phase == Phase.Ascending)
         {
             _ascentTimer += Time.deltaTime;
             float norm  = (ascentCatchupTime <= 0f) ? 1f : Mathf.Clamp01(_ascentTimer / ascentCatchupTime);
             float scale = Mathf.Clamp01(ascentLagCurve.Evaluate(norm)); // expect 1→0
-            newOffset = -_lastUp * (ascentLagMax * scale);
-            _lastAppliedOffset = newOffset;
-            _chargeShakeOutT = 0f; // ensure no charge tail continues here
+            lagOffset = -_lastUp * (ascentLagMax * scale);
+            _lastAppliedOffset = lagOffset;
         }
         else if (_phase == Phase.Falling)
         {
             _fallTimer += Time.deltaTime;
             float norm  = (fallLagRamp <= 0f) ? 1f : Mathf.Clamp01(_fallTimer / fallLagRamp);
             float scale = Mathf.Clamp01(fallLagCurve.Evaluate(norm)); // expect 0→1
-            newOffset = -_lastUp * (fallLagMax * scale);
-            _lastAppliedOffset = newOffset;
-            _chargeShakeOutT = 0f; // ensure no charge tail continues here
+            lagOffset = -_lastUp * (fallLagMax * scale);
+            _lastAppliedOffset = lagOffset;
         }
-        else if (_phase == Phase.Charging)
+        else // Idle or Charging
         {
-            // during charge, no positional lag — but we add tremble
-            Vector3 shake = ComputeChargeShakeOffset(Time.deltaTime);
-            newOffset = shake; // do not write to _lastAppliedOffset (we don't want post-land catch-up from shake)
-        }
-        else // Idle
-        {
-            // Post-landing catch-up: ease whatever offset we had toward zero
+            // Post-landing catch-up: ease previous lag to zero
             if (_lastAppliedOffset.sqrMagnitude > 1e-6f && postLandCatchupTime > 0f)
             {
                 _postLandT += Time.deltaTime / Mathf.Max(0.0001f, postLandCatchupTime);
                 float t = Mathf.Clamp01(_postLandT);
                 float scale = Mathf.Clamp01(postLandCurve.Evaluate(t)); // 1→0
-                newOffset = _lastAppliedOffset * scale;
+                lagOffset = _lastAppliedOffset * scale;
 
                 if (_postLandT >= 1f)
                 {
@@ -261,18 +373,46 @@ public class CameraBoostFX : MonoBehaviour
             }
             else
             {
-                newOffset = Vector3.zero;
+                lagOffset = Vector3.zero;
                 _lastAppliedOffset = Vector3.zero;
-            }
-
-            // allow a short “tail” fade after leaving Charging
-            if (_chargeShakeOutT > 0f && _chargeShakeOutT < chargeShakeFadeOut)
-            {
-                newOffset += ComputeChargeShakeOffset(Time.deltaTime);
             }
         }
 
-        playerCamera.SetExternalCameraOffset(newOffset);
+        // Charging tremble (added on top of lagOffset)
+        Vector3 shakeOffset = Vector3.zero;
+        if (_phase == Phase.Charging && chargeShakeAmplitude > 0f)
+        {
+            Transform basis = cam ? cam.transform : transform;
+            float t = Time.time;
+
+            // Per-channel Perlin in [0,1] → shift to [-1,1]
+            float nx = Mathf.PerlinNoise(_shakeSeed.x, t * chargeShakeFrequency) * 2f - 1f;
+            float ny = Mathf.PerlinNoise(_shakeSeed.y, t * chargeShakeFrequency) * 2f - 1f;
+            float nz = Mathf.PerlinNoise(_shakeSeed.z, t * chargeShakeFrequency) * 2f - 1f;
+
+            float envelope = chargeShakeScaleByCharge ? Mathf.Clamp01(_charge01) : 1f;
+            Vector3 local = new Vector3(nx * chargeShakeAxes.x, ny * chargeShakeAxes.y, nz * chargeShakeAxes.z)
+                            * (chargeShakeAmplitude * envelope);
+
+            // Convert to world using camera local axes
+            Vector3 target =
+                basis.right   * local.x +
+                basis.up      * local.y +
+                basis.forward * local.z;
+
+            // Smooth the shake so it doesn't buzz
+            _chargeShakeOffset = Vector3.Lerp(_chargeShakeOffset, target, 1f - Mathf.Exp(-chargeShakeDamping * Time.deltaTime));
+            shakeOffset = _chargeShakeOffset;
+        }
+        else
+        {
+            // Decay shake to zero quickly when not charging
+            _chargeShakeOffset = Vector3.Lerp(_chargeShakeOffset, Vector3.zero, 1f - Mathf.Exp(-chargeShakeDamping * Time.deltaTime));
+            shakeOffset = _chargeShakeOffset;
+        }
+
+        // Hand the combined offset to PlayerCamera
+        playerCamera.SetExternalCameraOffset(lagOffset + shakeOffset);
     }
 
     // ─────────────────────────────────────────────────────
@@ -280,57 +420,51 @@ public class CameraBoostFX : MonoBehaviour
 
     public void OnChargeProgress(float normalized)
     {
-        _landFovActive = false;
+        // No blur during charge; keep tremble
+        _landFovActive  = false;
+        _landBlurActive = false;
 
-        // if we just entered Charging, reset shake timers
-        if (_phase != Phase.Charging)
-        {
-            _chargeShakeTime = 0f;
-            _chargeShakeOutT = 0f;
-        }
-
-        _phase = Phase.Charging;
+        _phase    = Phase.Charging;
         _charge01 = Mathf.Clamp01(normalized);
-        // keep offsets; charging uses only shake offset
+        // offsets handled in LateUpdate (shake only; no lag)
     }
 
     public void OnChargeCancel()
     {
-        _landFovActive = false;
-
-        // leaving Charging → start fade-out tail for shake
-        if (_phase == Phase.Charging)
-        {
-            _chargeShakeOutT = 0f; // will fade in LateUpdate idle branch
-        }
+        _landFovActive  = false;
+        _landBlurActive = false;
 
         _phase = Phase.Idle;
         _charge01 = 0f;
         _ascentTimer = _fallTimer = 0f;
-        // keep residual offset for post-land fade if any (comes from ascent/fall only)
+
+        // reset blur immediately
+        PushEdgeBlurGlobals(0f, chargeInner, chargeOuter);
     }
 
     public void OnLaunch(Vector3 up)
     {
-        _landFovActive = false;
+        _landFovActive  = false;
+        _landBlurActive = false;
 
         _phase = Phase.Ascending;
         _ascentTimer = 0f;
         _fallTimer = 0f;
 
-        // Reset fall FOV progress so when we hit apex we start clean from that FOV
+        // Reset fall FOV progress so apex starts from that FOV
         _fallFovT = 0f;
         _fallFovStart = cam ? cam.fieldOfView : _baseFov;
 
-        _lastUp = (up.sqrMagnitude > 1e-6f) ? up.normalized : Vector3.up;
+        // Reset fall blur progress
+        _fallBlurT = 0f;
 
-        // stop any charge shake immediately
-        _chargeShakeOutT = chargeShakeFadeOut; // kill tail
+        _lastUp = (up.sqrMagnitude > 1e-6f) ? up.normalized : Vector3.up;
     }
 
     public void OnApex(Vector3 up)
     {
-        _landFovActive = false;
+        _landFovActive  = false;
+        _landBlurActive = false;
 
         // Switch to falling — capture the exact apex FOV as the start point
         _phase = Phase.Falling;
@@ -338,6 +472,8 @@ public class CameraBoostFX : MonoBehaviour
 
         _fallFovT = 0f;
         if (cam) _fallFovStart = cam.fieldOfView;
+
+        _fallBlurT = 0f;
 
         _lastUp = (up.sqrMagnitude > 1e-6f) ? up.normalized : Vector3.up;
     }
@@ -351,16 +487,18 @@ public class CameraBoostFX : MonoBehaviour
         // Start post-landing lag fade from whatever offset we had
         _postLandT = 0f;
 
-        // Begin smooth FOV return from current value to base
+        // FOV: smooth return from current value to base
         if (cam)
         {
             _landFovActive = true;
             _landFovT = 0f;
-            _landFovStart = cam.fieldOfView; // whatever it is at landing
+            _landFovStart = cam.fieldOfView;
         }
 
-        // ensure no residual shake
-        _chargeShakeOutT = chargeShakeFadeOut;
+        // BLUR: fade out from current intensity
+        _landBlurActive = true;
+        _landBlurT = 0f;
+        _landBlurStart = _currentBlurIntensity; // captured via PushEdgeBlurGlobals bookkeeping
     }
 
     public void CancelAll()
@@ -368,13 +506,15 @@ public class CameraBoostFX : MonoBehaviour
         _phase = Phase.Idle;
         _charge01 = 0f;
         _ascentTimer = _fallTimer = 0f;
-        _landFovActive = false;
+        _landFovActive  = false;
+        _landBlurActive = false;
 
         _lastAppliedOffset = Vector3.zero;
+        _chargeShakeOffset = Vector3.zero;
         _postLandT = 0f;
 
-        _chargeShakeTime = 0f;
-        _chargeShakeOutT = chargeShakeFadeOut; // no shake
+        _currentBlurIntensity = 0f;
+        PushEdgeBlurGlobals(0f, chargeInner, chargeOuter);
 
         if (playerCamera) playerCamera.SetExternalCameraOffset(Vector3.zero);
         if (cam) cam.fieldOfView = _baseFov;
@@ -397,71 +537,33 @@ public class CameraBoostFX : MonoBehaviour
         _landFovActive = false;
         _landFovT = 0f;
 
+        _landBlurActive = false;
+        _landBlurT = 0f;
+        _landBlurStart = 0f;
+        _currentBlurIntensity = 0f;
+
         _lastAppliedOffset = Vector3.zero;
+        _chargeShakeOffset = Vector3.zero;
         _postLandT = 0f;
 
-        _chargeShakeTime = 0f;
-        _chargeShakeOutT = chargeShakeFadeOut; // no shake initially
-
         if (cam) { _baseFov = cam.fieldOfView; }
+
+        // ensure globals are sane on enable
+        PushEdgeBlurGlobals(0f, chargeInner, chargeOuter);
     }
 
-    // ─────────────────────────────────────────────────────
-    // Helpers
-
-    // Returns a small 3D offset for tremble during charging.
-    // Uses Perlin noise so it’s smooth, with fade in/out and respects camera/world space.
-    private Vector3 ComputeChargeShakeOffset(float dt)
+    // ── Edge blur globals driving ──
+    void PushEdgeBlurGlobals(float intensity, float inner, float outer)
     {
-        // advance time
-        _chargeShakeTime += dt;
+        _currentBlurIntensity = Mathf.Clamp01(intensity);
+        inner = Mathf.Clamp01(inner);
+        outer = Mathf.Clamp01(Mathf.Max(inner + 0.001f, outer));
 
-        // base amplitude factor from charge progress (more charge = stronger tremble)
-        float chargeFactor = Mathf.Clamp01(_charge01);
-
-        // fade in while charging
-        float fadeIn = (chargeShakeFadeIn <= 0f) ? 1f : Mathf.Clamp01(_chargeShakeTime / Mathf.Max(0.0001f, chargeShakeFadeIn));
-
-        // if we’re no longer in Charging, allow a short fade-out tail
-        float fadeOut = 1f;
-        if (_phase != Phase.Charging && _chargeShakeOutT < chargeShakeFadeOut)
-        {
-            _chargeShakeOutT += dt;
-            float t = Mathf.Clamp01(1f - (_chargeShakeOutT / Mathf.Max(0.0001f, chargeShakeFadeOut)));
-            fadeOut = t;
-        }
-
-        float amp = chargeShakeAmplitude * chargeFactor * fadeIn * fadeOut;
-        if (amp <= 0.00001f) return Vector3.zero;
-
-        // noise time scale
-        float tX = _noiseSeedX + _chargeShakeTime * chargeShakeFrequency;
-        float tY = _noiseSeedY + _chargeShakeTime * chargeShakeFrequency * 1.07f;
-        float tZ = _noiseSeedZ + _chargeShakeTime * chargeShakeFrequency * 0.93f;
-
-        // Perlin gives [0,1]; remap to [-1,1]
-        float nx = Mathf.PerlinNoise(tX, 17.123f) * 2f - 1f;
-        float ny = Mathf.PerlinNoise(tY, 37.456f) * 2f - 1f;
-        float nz = Mathf.PerlinNoise(tZ, 73.789f) * 2f - 1f;
-
-        Vector3 dir = new Vector3(nx, ny, nz);
-
-        // pick a basis: camera space or world space
-        if (chargeShakeInCameraSpace && cam != null)
-        {
-            // camera basis
-            Transform ct = cam.transform;
-            Vector3 offset =
-                ct.right   * dir.x +
-                ct.up      * dir.y +
-                ct.forward * dir.z;
-
-            return offset * amp;
-        }
-        else
-        {
-            // simple world-space shake
-            return dir * amp;
-        }
+        Shader.EnableKeyword("_EDGE_BLUR_DRIVEN");
+        Shader.SetGlobalFloat(ID_Intensity, _currentBlurIntensity);
+        Shader.SetGlobalFloat(ID_Inner, inner);
+        Shader.SetGlobalFloat(ID_Outer, outer);
+        Shader.SetGlobalFloat(ID_Spread, Mathf.Max(0.001f, blurSpread));
+        Shader.SetGlobalFloat(ID_Samples, Mathf.Clamp(blurSamples, 1, 16));
     }
 }

@@ -57,10 +57,14 @@ public class BoostJump : MonoBehaviour
     [Header("Speedlines FX")]
     [Tooltip("Optional. If empty, we search the scene for a GameObject named EXACTLY 'FX_speedlines' and use its ParticleSystem.\nKeep this object parented to the PLAYER ROOT (not the camera).")]
     [SerializeField] private ParticleSystem speedlines;
-    [Tooltip("Extra rotation applied after facing the camera. Use this to fix systems that 'pour down'. Try (90,0,0) or (-90,0,0).")]
     [SerializeField] private Vector3 speedlinesLookOffsetEuler = new Vector3(90f, 0f, 0f);
-    [Tooltip("If ON, match the camera roll (use camera.up). If OFF, keep world-up roll.")]
     [SerializeField] private bool speedlinesMatchCameraRoll = true;
+
+    [Header("Groundbreak FX")]
+    [Tooltip("Optional. If empty, we search the scene for a prefab named EXACTLY 'FX_groundbreak' via Resources or in-scene.")]
+    [SerializeField] private GameObject fxGroundbreakPrefab;
+    [Tooltip("If true and prefab isn’t assigned, will try Resources.Load(\"FX_groundbreak\"). Place your prefab in a Resources folder.")]
+    [SerializeField] private bool tryResourcesLoad = true;
 
     // ── internals ──
     private float _holdTimer = 0f;
@@ -86,8 +90,8 @@ public class BoostJump : MonoBehaviour
     private Transform _camXform;
 
     // flight entry locking state
-    private bool _flightLockActive = false;   // we are currently locking any flight entry
-    private bool _flightWasEnabled = false;   // original enabled state of PlayerFlight (for restore)
+    private bool _flightLockActive = false;
+    private bool _flightWasEnabled = false;
 
     // ── lifecycle ──
     private void Awake()
@@ -98,7 +102,6 @@ public class BoostJump : MonoBehaviour
         if (!playerMovement) playerMovement = GetComponentInParent<PlayerMovement>();
         if (!playerJump)     playerJump     = GetComponentInParent<PlayerJump>();
 
-        // Find a camera (for base FOV only)
         if (!playerCam)
         {
             var rig = GetComponentInParent<PlayerCamera>(true);
@@ -110,7 +113,6 @@ public class BoostJump : MonoBehaviour
             if (!playerCam && Camera.main) playerCam = Camera.main;
         }
 
-        // Bind a gravity provider method, if any
         if (!gravityBody) gravityBody = GetComponentInParent<GravityBody>();
         if (gravityBody)
         {
@@ -120,7 +122,6 @@ public class BoostJump : MonoBehaviour
             );
         }
 
-        // Bind PlayerFlight.EnterFlight() if present
         if (playerFlight)
         {
             _miEnterFlight = playerFlight.GetType().GetMethod(
@@ -129,15 +130,15 @@ public class BoostJump : MonoBehaviour
             );
         }
 
-        // Auto-bind CameraBoostFX (works with CameraController holder)
         TryBindCameraBoostFx();
 
-        // Bind speedlines + camera transform
         EnsureSpeedlinesBound();
         EnsureCameraTransform();
 
         EnsureAnimator();
         SetBoostAnim(false);
+
+        EnsureGroundbreakPrefabBound();
     }
 
     private void OnEnable()
@@ -145,47 +146,44 @@ public class BoostJump : MonoBehaviour
         if (!cameraBoostFx) TryBindCameraBoostFx();
         EnsureSpeedlinesBound();
         EnsureCameraTransform();
+        EnsureGroundbreakPrefabBound();
     }
 
     private void OnDisable()
-{
-    _charging  = false;
-    _holdTimer = 0f;
-    _hadMoveDuringCharge = false;
-
-    if (playerMovement)
     {
-        playerMovement.CancelExternalHorizontalHold();
-        playerMovement.SetExternalStopMovement(false);
+        _charging  = false;
+        _holdTimer = 0f;
+        _hadMoveDuringCharge = false;
+
+        if (playerMovement)
+        {
+            playerMovement.CancelExternalHorizontalHold();
+            playerMovement.SetExternalStopMovement(false);
+        }
+        if (playerJump) playerJump.SetJumpSuppressed(false);
+
+        LockFlightEntry(false);
+
+        SetBoostAnim(false);
+        cameraBoostFx?.OnChargeCancel();
+
+        StopSpeedlines();
     }
-    if (playerJump) playerJump.SetJumpSuppressed(false);
-
-    // Always ensure flight gets unlocked/restored if this component disables mid-boost
-    LockFlightEntry(false);
-
-    SetBoostAnim(false);
-    cameraBoostFx?.OnChargeCancel();
-
-    StopSpeedlines();
-}
 
     private void Update()
     {
-        // If already flying, cancel any charge
         if (playerFlight && playerFlight.IsFlying)
             CancelCharge();
 
         bool grounded   = playerMovement ? playerMovement.IsGrounded() : IsGrounded();
-        bool crouchHeld = playerCrouch && playerCrouch.IsCrouching; // Shift
+        bool crouchHeld = playerCrouch && playerCrouch.IsCrouching;
         bool spaceHeld  = Input.GetKey(triggerKey);
 
-        // Combo to start charging: crouch + space on ground
         bool wantsCharge = grounded && crouchHeld && spaceHeld;
 
         if (!_charging)
         {
-            if (wantsCharge)
-                StartCharge(crouchHeld, spaceHeld);
+            if (wantsCharge) StartCharge(crouchHeld, spaceHeld);
         }
         else
         {
@@ -196,14 +194,11 @@ public class BoostJump : MonoBehaviour
 
             bool lostGround = !grounded;
 
-            // Edges (based on previous frame)
-            bool releasedCrouchThisFrame = _prevCrouchHeld && !crouchHeld; // SHIFT up => cancel
-            bool releasedSpaceThisFrame  = _prevSpaceHeld  && !spaceHeld;  // SPACE up => maybe launch
+            bool releasedCrouchThisFrame = _prevCrouchHeld && !crouchHeld;
+            bool releasedSpaceThisFrame  = _prevSpaceHeld  && !spaceHeld;
 
             if (releasedCrouchThisFrame)
-            {
                 CancelCharge();
-            }
             else if (releasedSpaceThisFrame)
             {
                 if (_holdTimer >= chargeTimeSeconds) Launch();
@@ -211,7 +206,7 @@ public class BoostJump : MonoBehaviour
             }
             else if (lostGround)
             {
-                CancelCharge(); // no auto-launch
+                CancelCharge();
             }
         }
 
@@ -225,16 +220,14 @@ public class BoostJump : MonoBehaviour
 
         _holdTimer += Time.fixedDeltaTime;
 
-        // While charging: HARD LOCK horizontal every physics step
         if (playerBody)
         {
             Vector3 up   = GetUp();
             Vector3 v    = playerBody.velocity;
             Vector3 vert = Vector3.Project(v, up);
-            playerBody.velocity = vert; // kill horizontal each step
+            playerBody.velocity = vert;
         }
 
-        // Feed charge progress to camera FX (0..1)
         if (cameraBoostFx)
         {
             float t = chargeTimeSeconds <= 0f ? 1f : Mathf.Clamp01(_holdTimer / chargeTimeSeconds);
@@ -244,10 +237,7 @@ public class BoostJump : MonoBehaviour
 
     private void LateUpdate()
     {
-        // Rebind camera transform if needed (handles camera swaps)
         if (_camXform == null) EnsureCameraTransform();
-
-        // Align speedlines to the camera view each frame
         AlignSpeedlinesTowardCamera();
     }
 
@@ -262,14 +252,11 @@ public class BoostJump : MonoBehaviour
         {
             Vector3 up = GetUp();
 
-            // single-strength values
             float vMag = Mathf.Max(0f, maxLaunchVertical);
             float hMag = Mathf.Max(0f, maxLaunchHorizontal);
 
-            // Always apply vertical
             Vector3 newVel = up * vMag;
 
-            // Horizontal direction uses **current** input at launch; never flipped.
             Vector3 moveDir = Vector3.zero;
             if (playerMovement != null)
                 moveDir = playerMovement.GetMoveDirection();
@@ -290,7 +277,6 @@ public class BoostJump : MonoBehaviour
             }
             else
             {
-                // prefer current input, otherwise fallback to player forward
                 Vector3 fallback = Vector3.ProjectOnPlane(transform.forward, up);
                 horizDir = (hasMoveNow ? moveDir : fallback).normalized;
             }
@@ -303,7 +289,6 @@ public class BoostJump : MonoBehaviour
 
             playerBody.velocity = newVel;
 
-            // keep horizontal from being overwritten
             if (playerMovement && horiz.sqrMagnitude > 0.0001f)
             {
                 playerMovement.HoldExternalHorizontal(horiz, 15f);
@@ -311,137 +296,123 @@ public class BoostJump : MonoBehaviour
             }
 
             cameraBoostFx?.OnLaunch(up);
+
+            // 🔸 spawn groundbreak at takeoff
+            SpawnGroundbreak();
         }
 
         if (playerMovement) playerMovement.SetExternalStopMovement(false);
         if (playerMovement) playerMovement.NotifyJumped();
 
         SetBoostAnim(_wasBoostJumpThisLaunch);
-
-        // Start the visual FX
         PlaySpeedlines();
-
-        // Keep jump/dash suppressed until boost arc finishes
         StartCoroutine(BoostApexAndAfter());
     }
 
     // ── actions ──
 
     private void StartCharge(bool crouchHeldNow, bool spaceHeldNow)
-{
-    _charging  = true;
-    _holdTimer = 0f;
-    _hadMoveDuringCharge = false;
-
-    // capture edges
-    _prevCrouchHeld = crouchHeldNow;
-    _prevSpaceHeld  = spaceHeldNow;
-
-    // zero horizontal while charging
-    if (playerBody)
     {
-        Vector3 up   = GetUp();
-        Vector3 vert = Vector3.Project(playerBody.velocity, up);
-        playerBody.velocity = vert;
+        _charging  = true;
+        _holdTimer = 0f;
+        _hadMoveDuringCharge = false;
+
+        _prevCrouchHeld = crouchHeldNow;
+        _prevSpaceHeld  = spaceHeldNow;
+
+        if (playerBody)
+        {
+            Vector3 up   = GetUp();
+            Vector3 vert = Vector3.Project(playerBody.velocity, up);
+            playerBody.velocity = vert;
+        }
+
+        if (playerMovement) playerMovement.SetExternalStopMovement(true);
+        SuppressJump(true);
+        var dash = GetComponentInParent<PlayerDash>();
+        dash?.SetDashSuppressed(true);
+
+        LockFlightEntry(true);
+
+        cameraBoostFx?.OnChargeProgress(0f);
     }
-
-    // Hard stop movement & suppress jump/dash for the whole boost window
-    if (playerMovement) playerMovement.SetExternalStopMovement(true);
-    SuppressJump(true);
-    var dash = GetComponentInParent<PlayerDash>();
-    dash?.SetDashSuppressed(true);
-
-    // 🔒 lock any flight entry for the entire jump window (even if lockFlight=false)
-    LockFlightEntry(true);
-
-    // FX
-    cameraBoostFx?.OnChargeProgress(0f);
-}
 
     private void CancelCharge()
-{
-    if (!_charging) return;
+    {
+        if (!_charging) return;
 
-    _charging  = false;
-    _holdTimer = 0f;
-    _hadMoveDuringCharge = false;
+        _charging  = false;
+        _holdTimer = 0f;
+        _hadMoveDuringCharge = false;
 
-    if (playerMovement) playerMovement.SetExternalStopMovement(false);
+        if (playerMovement) playerMovement.SetExternalStopMovement(false);
 
-    // lift gates (no launch happened)
-    SuppressJump(false);
-    var dash = GetComponentInParent<PlayerDash>();
-    dash?.SetDashSuppressed(false);
+        SuppressJump(false);
+        var dash = GetComponentInParent<PlayerDash>();
+        dash?.SetDashSuppressed(false);
 
-    // 🔓 unlock flight lock (we’re back on ground)
-    LockFlightEntry(false);
+        LockFlightEntry(false);
 
-    SetBoostAnim(false);
-    cameraBoostFx?.OnChargeCancel();
+        SetBoostAnim(false);
+        cameraBoostFx?.OnChargeCancel();
 
-    StopSpeedlines();
-}
+        StopSpeedlines();
+    }
 
     private System.Collections.IEnumerator BoostApexAndAfter()
-{
-    const float timeout = 4f;
-    float t = 0f;
-    bool wentUp = false;
-
-    while (t < timeout)
     {
-        yield return null;
-        t += Time.deltaTime;
+        const float timeout = 4f;
+        float t = 0f;
+        bool wentUp = false;
 
-        if (!playerBody) break;
+        while (t < timeout)
+        {
+            yield return null;
+            t += Time.deltaTime;
 
-        Vector3 up = GetUp();
-        float vUp = Vector3.Dot(playerBody.velocity, up);
-        if (vUp > 0.5f) wentUp = true;      // rising
-        if (wentUp && vUp <= 0.05f) break;  // reached apex
+            if (!playerBody) break;
+
+            Vector3 up = GetUp();
+            float vUp = Vector3.Dot(playerBody.velocity, up);
+            if (vUp > 0.5f) wentUp = true;
+            if (wentUp && vUp <= 0.05f) break;
+        }
+
+        cameraBoostFx?.OnApex(GetUp());
+
+        if (!lockFlight && playerFlight != null)
+        {
+            if (playerMovement) playerMovement.CancelExternalHorizontalHold();
+
+            LockFlightEntry(false);
+            TryEnterFlight();
+
+            SetBoostAnim(false);
+            cameraBoostFx?.OnLand();
+            StopSpeedlines();
+        }
+        else
+        {
+            if (_fallBoostRoutine != null) StopCoroutine(_fallBoostRoutine);
+            _fallBoostRoutine = NoFlightFallBoostUntilGrounded();
+            yield return StartCoroutine(_fallBoostRoutine);
+
+            if (playerMovement) playerMovement.CancelExternalHorizontalHold();
+            SetBoostAnim(false);
+
+            cameraBoostFx?.OnLand();
+            StopSpeedlines();
+
+            LockFlightEntry(false);
+        }
+
+        SuppressJump(false);
+        var dash = GetComponentInParent<PlayerDash>();
+        dash?.SetDashSuppressed(false);
+
+        // 🔸 spawn groundbreak on landing
+        SpawnGroundbreak();
     }
-
-    // We've reached the apex
-    cameraBoostFx?.OnApex(GetUp());
-
-    if (!lockFlight && playerFlight != null)
-    {
-        // We kept flight entry locked the whole jump; now, at halfway (apex),
-        // FORCE entry into flight and remove the lock just-in-time.
-        if (playerMovement) playerMovement.CancelExternalHorizontalHold();
-
-        // 🔓 unlock just before we request entry
-        LockFlightEntry(false);
-
-        TryEnterFlight(); // <— force it now (halfway)
-
-        SetBoostAnim(false);
-
-        cameraBoostFx?.OnLand();
-        StopSpeedlines(); // entering flight ends the jump FX
-    }
-    else
-    {
-        // lockFlight = true → keep flight locked the entire airborne path until landing
-        if (_fallBoostRoutine != null) StopCoroutine(_fallBoostRoutine);
-        _fallBoostRoutine = NoFlightFallBoostUntilGrounded();
-        yield return StartCoroutine(_fallBoostRoutine);
-
-        if (playerMovement) playerMovement.CancelExternalHorizontalHold();
-        SetBoostAnim(false);
-
-        cameraBoostFx?.OnLand();
-        StopSpeedlines();
-
-        // 🔓 now that we’ve landed, release the flight lock
-        LockFlightEntry(false);
-    }
-
-    // lift jump/dash suppression (boost phase is over)
-    SuppressJump(false);
-    var dash = GetComponentInParent<PlayerDash>();
-    dash?.SetDashSuppressed(false);
-}
 
     private System.Collections.IEnumerator NoFlightFallBoostUntilGrounded()
     {
@@ -449,7 +420,6 @@ public class BoostJump : MonoBehaviour
 
         while (true)
         {
-            // break on ground
             bool grounded = playerMovement ? playerMovement.IsGrounded() : IsGrounded();
             if (grounded) yield break;
 
@@ -463,7 +433,6 @@ public class BoostJump : MonoBehaviour
                     float curve = fallAccelCurve != null ? Mathf.Clamp01(fallAccelCurve.Evaluate(normT)) : normT;
 
                     float accel = fallAccelMax * curve;
-                    // extra downward accel
                     playerBody.AddForce(-up * accel * Time.deltaTime, ForceMode.Acceleration);
                 }
             }
@@ -473,7 +442,106 @@ public class BoostJump : MonoBehaviour
         }
     }
 
-    // ── helpers ──
+    // ── Groundbreak spawn + material handoff ──
+
+    void EnsureGroundbreakPrefabBound()
+    {
+        if (fxGroundbreakPrefab != null) return;
+
+        // Try Find in-scene first (disabled templates)
+        var go = GameObject.Find("FX_groundbreak");
+        if (go != null && go.scene.IsValid())
+        {
+            fxGroundbreakPrefab = go; // will instantiate this scene object (acts like a prefab)
+            return;
+        }
+
+        if (tryResourcesLoad)
+        {
+            // Requires a Resources/FX_groundbreak.prefab
+            var res = Resources.Load<GameObject>("FX_groundbreak");
+            if (res != null) fxGroundbreakPrefab = res;
+        }
+    }
+
+    void SpawnGroundbreak()
+    {
+        if (fxGroundbreakPrefab == null || playerBody == null) return;
+
+        Vector3 up = GetUp();
+        Vector3 pos = playerBody.position + (-up) * 0.05f; // slight sink to avoid floating
+        Quaternion rot = Quaternion.LookRotation(Vector3.ProjectOnPlane(transform.forward, up).normalized + 0.0001f * Vector3.forward, up);
+
+        var fx = Instantiate(fxGroundbreakPrefab, pos, rot);
+
+        // Find the slabs script in the spawned hierarchy
+        var slabs = fx.GetComponentInChildren<SlabRingSimpleFX>(true);
+        if (slabs != null)
+        {
+            // Fetch ground material and apply
+            var mat = GetGroundMaterialUnderPlayer(playerBody.position, up);
+            if (mat != null)
+                slabs.ApplyMaterial(mat);
+        }
+    }
+
+    Material GetGroundMaterialUnderPlayer(Vector3 origin, Vector3 up, float rayLen = 3f)
+    {
+        if (!Physics.Raycast(origin, -up, out var hit, rayLen, ~0, QueryTriggerInteraction.Ignore))
+            return null;
+
+        // Terrain → synthesize a material from TerrainLayer (dominant)
+        var terrain = hit.collider.GetComponent<Terrain>();
+        if (terrain != null && terrain.terrainData != null)
+        {
+            var td = terrain.terrainData;
+            Vector3 local = hit.point - terrain.transform.position;
+            float u = Mathf.InverseLerp(0f, td.size.x, local.x);
+            float v = Mathf.InverseLerp(0f, td.size.z, local.z);
+
+            int sx = Mathf.Clamp(Mathf.RoundToInt(u * (td.alphamapWidth  - 1)), 0, td.alphamapWidth  - 1);
+            int sy = Mathf.Clamp(Mathf.RoundToInt(v * (td.alphamapHeight - 1)), 0, td.alphamapHeight - 1);
+            float[,,] alpha = td.GetAlphamaps(sx, sy, 1, 1);
+
+            int best = 0; float bestW = 0f;
+            for (int l = 0; l < td.alphamapLayers; l++)
+            {
+                float w = alpha[0,0,l];
+                if (w > bestW) { bestW = w; best = l; }
+            }
+
+            var layer = (best >= 0 && best < td.terrainLayers.Length) ? td.terrainLayers[best] : null;
+            if (layer != null)
+            {
+                // Build a lightweight URP/Lit material that matches the layer’s look
+                var lit = Shader.Find("Universal Render Pipeline/Lit");
+                if (lit == null) return null;
+                var m = new Material(lit) { name = (layer.diffuseTexture ? layer.diffuseTexture.name : "TerrainLayer") + " (Clone)" };
+                if (layer.diffuseTexture) m.SetTexture("_BaseMap", layer.diffuseTexture);
+                m.SetColor("_BaseColor", Color.white);
+                // Set tiling roughly from tileSize in world space → UV tiling estimate
+                Vector2 tiling = new Vector2(
+                    td.size.x / Mathf.Max(0.0001f, layer.tileSize.x),
+                    td.size.z / Mathf.Max(0.0001f, layer.tileSize.y)
+                );
+                m.SetTextureScale("_BaseMap", tiling);
+                m.SetTextureOffset("_BaseMap", layer.tileOffset);
+                return m;
+            }
+        }
+
+        // MeshRenderer → clone its sharedMaterial to keep it independent
+        var rend = hit.collider.GetComponent<Renderer>();
+        if (rend != null && rend.sharedMaterial != null)
+        {
+            var clone = new Material(rend.sharedMaterial) { name = rend.sharedMaterial.name + " (Clone)" };
+            return clone;
+        }
+
+        return null;
+    }
+
+    // ── helpers (existing) ──
 
     private void TryBindCameraBoostFx()
     {
@@ -486,12 +554,10 @@ public class BoostJump : MonoBehaviour
 
         CameraBoostFX fx = null;
 
-        // 1) Prefer the PlayerCamera rig (e.g., your CameraController)
         var rig = GetComponentInParent<PlayerCamera>(true);
         if (!rig) rig = FindObjectOfType<PlayerCamera>(true);
         if (rig) fx = rig.GetComponent<CameraBoostFX>();
 
-        // 2) If we have a camera, try near it (parent/children)
         if (!fx && playerCam)
         {
             fx = playerCam.GetComponent<CameraBoostFX>();
@@ -499,7 +565,6 @@ public class BoostJump : MonoBehaviour
             if (!fx) fx = playerCam.GetComponentInChildren<CameraBoostFX>(true);
         }
 
-        // 3) Last resort: any in scene (pick the closest to us)
         if (!fx)
         {
             var all = FindObjectsOfType<CameraBoostFX>(true);
@@ -507,11 +572,7 @@ public class BoostJump : MonoBehaviour
             foreach (var cand in all)
             {
                 float d = (cand.transform.position - transform.position).sqrMagnitude;
-                if (d < best)
-                {
-                    best = d;
-                    fx = cand;
-                }
+                if (d < best) { best = d; fx = cand; }
             }
         }
 
@@ -521,7 +582,6 @@ public class BoostJump : MonoBehaviour
         {
             if (!playerCam)
             {
-                // try to find any camera under the same rig/fx, else fallback to main
                 var camNearFx = cameraBoostFx.GetComponentInChildren<Camera>(true);
                 if (!camNearFx) camNearFx = cameraBoostFx.GetComponentInParent<Camera>(true);
                 if (!camNearFx) camNearFx = Camera.main;
@@ -569,15 +629,12 @@ public class BoostJump : MonoBehaviour
     {
         if (_speedlinesXform == null || _camXform == null) return;
 
-        // Face the camera: forward points from speedlines to camera.
-        // Choose up vector: camera.up (match camera roll) or world up.
         Vector3 toCam = _camXform.position - _speedlinesXform.position;
         if (toCam.sqrMagnitude < 1e-6f) return;
 
         Vector3 upRef = speedlinesMatchCameraRoll ? _camXform.up : Vector3.up;
 
         Quaternion look = Quaternion.LookRotation(toCam.normalized, upRef);
-        // apply user-tweakable offset AFTER look-at to correct for system's emission axis
         look *= Quaternion.Euler(speedlinesLookOffsetEuler);
 
         _speedlinesXform.rotation = look;
@@ -651,7 +708,7 @@ public class BoostJump : MonoBehaviour
         catch { /* ignore */ }
     }
 
-    // Animator utilities
+    // Animator utilities (unchanged)
     private void EnsureAnimator()
     {
         if (AnimatorHasBool(characterAnimator, isBoostJumpParam))
@@ -727,61 +784,50 @@ public class BoostJump : MonoBehaviour
         fallAccelMax         = Mathf.Max(0f, fallAccelMax);
         fallAccelRampTime    = Mathf.Max(0f, fallAccelRampTime);
     }
-
-    /// <summary>
-/// Prevents PlayerFlight from being entered while 'on' is true.
-/// Tries a reflective "SetFlightSuppressed(bool)" or "SetEntrySuppressed(bool)" first.
-/// If none exist, temporarily disables the PlayerFlight component and restores it later.
-/// </summary>
-private void LockFlightEntry(bool on)
-{
-    if (playerFlight == null)
-    {
-        _flightLockActive = false;
-        return;
-    }
-
-    // Try reflective suppressor first (non-alloc once would be nicer, but this is safe)
-    var t = playerFlight.GetType();
-    var setSupp = t.GetMethod("SetFlightSuppressed",
-                              BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-    var setEntrySupp = t.GetMethod("SetEntrySuppressed",
-                                   BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-
-    if (setSupp != null)
-    {
-        setSupp.Invoke(playerFlight, new object[] { on });
-        _flightLockActive = on;
-        return;
-    }
-    if (setEntrySupp != null)
-    {
-        setEntrySupp.Invoke(playerFlight, new object[] { on });
-        _flightLockActive = on;
-        return;
-    }
-
-    // Fallback: toggle component enabled state
-    if (on)
-    {
-        if (!_flightLockActive) // only capture once
-            _flightWasEnabled = playerFlight.enabled;
-
-        if (playerFlight.enabled)
-            playerFlight.enabled = false;
-
-        _flightLockActive = true;
-    }
-    else
-    {
-        if (_flightLockActive)
-        {
-            // restore to original enabled state
-            if (playerFlight.enabled != _flightWasEnabled)
-                playerFlight.enabled = _flightWasEnabled;
-        }
-        _flightLockActive = false;
-    }
-}
 #endif
+
+    // Flight entry locker (unchanged from your version)
+    private void LockFlightEntry(bool on)
+    {
+        if (playerFlight == null)
+        {
+            _flightLockActive = false;
+            return;
+        }
+
+        var t = playerFlight.GetType();
+        var setSupp = t.GetMethod("SetFlightSuppressed",
+                                  BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        var setEntrySupp = t.GetMethod("SetEntrySuppressed",
+                                       BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+        if (setSupp != null)
+        {
+            setSupp.Invoke(playerFlight, new object[] { on });
+            _flightLockActive = on;
+            return;
+        }
+        if (setEntrySupp != null)
+        {
+            setEntrySupp.Invoke(playerFlight, new object[] { on });
+            _flightLockActive = on;
+            return;
+        }
+
+        if (on)
+        {
+            if (!_flightLockActive) _flightWasEnabled = playerFlight.enabled;
+            if (playerFlight.enabled) playerFlight.enabled = false;
+            _flightLockActive = true;
+        }
+        else
+        {
+            if (_flightLockActive)
+            {
+                if (playerFlight.enabled != _flightWasEnabled)
+                    playerFlight.enabled = _flightWasEnabled;
+            }
+            _flightLockActive = false;
+        }
+    }
 }
