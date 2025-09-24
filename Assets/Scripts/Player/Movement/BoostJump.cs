@@ -66,6 +66,8 @@ public class BoostJump : MonoBehaviour
     [Tooltip("If true and prefab isn’t assigned, will try Resources.Load(\"FX_groundbreak\"). Place your prefab in a Resources folder.")]
     [SerializeField] private bool tryResourcesLoad = true;
 
+    [SerializeField] private JetpackRare jetpackRare; // optional; auto-found
+
     // ── internals ──
     private float _holdTimer = 0f;
     private bool  _charging  = false;
@@ -95,80 +97,94 @@ public class BoostJump : MonoBehaviour
 
     // ── lifecycle ──
     private void Awake()
+{
+    if (!playerFlight)   playerFlight   = GetComponentInParent<PlayerFlight>();
+    if (!playerBody)     playerBody     = GetComponentInParent<Rigidbody>();
+    if (!playerCrouch)   playerCrouch   = GetComponentInParent<PlayerCrouch>();
+    if (!playerMovement) playerMovement = GetComponentInParent<PlayerMovement>();
+    if (!playerJump)     playerJump     = GetComponentInParent<PlayerJump>();
+
+    // Auto-bind JetpackRare (so we can drive energy balls)
+    if (!jetpackRare) jetpackRare = GetComponentInParent<JetpackRare>();
+
+    // Find a camera (for base FOV only)
+    if (!playerCam)
     {
-        if (!playerFlight)   playerFlight   = GetComponentInParent<PlayerFlight>();
-        if (!playerBody)     playerBody     = GetComponentInParent<Rigidbody>();
-        if (!playerCrouch)   playerCrouch   = GetComponentInParent<PlayerCrouch>();
-        if (!playerMovement) playerMovement = GetComponentInParent<PlayerMovement>();
-        if (!playerJump)     playerJump     = GetComponentInParent<PlayerJump>();
-
-        if (!playerCam)
+        var rig = GetComponentInParent<PlayerCamera>(true);
+        if (rig)
         {
-            var rig = GetComponentInParent<PlayerCamera>(true);
-            if (rig)
-            {
-                var camInRig = rig.GetComponentInChildren<Camera>(true);
-                if (camInRig) playerCam = camInRig;
-            }
-            if (!playerCam && Camera.main) playerCam = Camera.main;
+            var camInRig = rig.GetComponentInChildren<Camera>(true);
+            if (camInRig) playerCam = camInRig;
         }
-
-        if (!gravityBody) gravityBody = GetComponentInParent<GravityBody>();
-        if (gravityBody)
-        {
-            _miGetGravityDir = gravityBody.GetType().GetMethod(
-                "GetEffectiveGravityDirection",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
-            );
-        }
-
-        if (playerFlight)
-        {
-            _miEnterFlight = playerFlight.GetType().GetMethod(
-                "EnterFlight",
-                BindingFlags.Instance | BindingFlags.NonPublic
-            );
-        }
-
-        TryBindCameraBoostFx();
-
-        EnsureSpeedlinesBound();
-        EnsureCameraTransform();
-
-        EnsureAnimator();
-        SetBoostAnim(false);
-
-        EnsureGroundbreakPrefabBound();
+        if (!playerCam && Camera.main) playerCam = Camera.main;
     }
+
+    // Bind a gravity provider method, if any
+    if (!gravityBody) gravityBody = GetComponentInParent<GravityBody>();
+    if (gravityBody)
+    {
+        _miGetGravityDir = gravityBody.GetType().GetMethod(
+            "GetEffectiveGravityDirection",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+        );
+    }
+
+    // Bind PlayerFlight.EnterFlight() if present
+    if (playerFlight)
+    {
+        _miEnterFlight = playerFlight.GetType().GetMethod(
+            "EnterFlight",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        );
+    }
+
+    TryBindCameraBoostFx();
+
+    EnsureSpeedlinesBound();
+    EnsureCameraTransform();
+
+    EnsureAnimator();
+    SetBoostAnim(false);
+
+    EnsureGroundbreakPrefabBound();
+
+    // ensure energy balls start off
+    jetpackRare?.SetChargingVisuals(false);
+}
 
     private void OnEnable()
-    {
-        if (!cameraBoostFx) TryBindCameraBoostFx();
-        EnsureSpeedlinesBound();
-        EnsureCameraTransform();
-        EnsureGroundbreakPrefabBound();
-    }
+{
+    if (!cameraBoostFx) TryBindCameraBoostFx();
+    EnsureSpeedlinesBound();
+    EnsureCameraTransform();
+    EnsureGroundbreakPrefabBound();
+
+    if (!jetpackRare) jetpackRare = GetComponentInParent<JetpackRare>();
+}
 
     private void OnDisable()
+{
+    _charging  = false;
+    _holdTimer = 0f;
+    _hadMoveDuringCharge = false;
+
+    if (playerMovement)
     {
-        _charging  = false;
-        _holdTimer = 0f;
-        _hadMoveDuringCharge = false;
-
-        if (playerMovement)
-        {
-            playerMovement.CancelExternalHorizontalHold();
-            playerMovement.SetExternalStopMovement(false);
-        }
-        if (playerJump) playerJump.SetJumpSuppressed(false);
-
-        LockFlightEntry(false);
-
-        SetBoostAnim(false);
-        cameraBoostFx?.OnChargeCancel();
-
-        StopSpeedlines();
+        playerMovement.CancelExternalHorizontalHold();
+        playerMovement.SetExternalStopMovement(false);
     }
+    if (playerJump) playerJump.SetJumpSuppressed(false);
+
+    // Make sure charging visuals stop if we get disabled mid-charge
+    jetpackRare?.SetChargingVisuals(false);
+
+    LockFlightEntry(false);
+
+    SetBoostAnim(false);
+    cameraBoostFx?.OnChargeCancel();
+
+    StopSpeedlines();
+}
 
     private void Update()
     {
@@ -242,122 +258,133 @@ public class BoostJump : MonoBehaviour
     }
 
     private void Launch()
+{
+    _charging = false;
+    _wasBoostJumpThisLaunch = false;
+
+    Vector3 horiz = Vector3.zero;
+
+    if (playerBody)
     {
-        _charging = false;
-        _wasBoostJumpThisLaunch = false;
+        Vector3 up = GetUp();
 
-        Vector3 horiz = Vector3.zero;
+        float vMag = Mathf.Max(0f, maxLaunchVertical);
+        float hMag = Mathf.Max(0f, maxLaunchHorizontal);
 
-        if (playerBody)
+        Vector3 newVel = up * vMag;
+
+        Vector3 moveDir = Vector3.zero;
+        if (playerMovement != null)
+            moveDir = playerMovement.GetMoveDirection();
+        else
         {
-            Vector3 up = GetUp();
-
-            float vMag = Mathf.Max(0f, maxLaunchVertical);
-            float hMag = Mathf.Max(0f, maxLaunchHorizontal);
-
-            Vector3 newVel = up * vMag;
-
-            Vector3 moveDir = Vector3.zero;
-            if (playerMovement != null)
-                moveDir = playerMovement.GetMoveDirection();
-            else
-            {
-                float h = Input.GetAxisRaw("Horizontal");
-                float v = Input.GetAxisRaw("Vertical");
-                moveDir = new Vector3(h, 0f, v);
-            }
-
-            moveDir = Vector3.ProjectOnPlane(moveDir, up);
-            bool hasMoveNow = moveDir.sqrMagnitude > 0.0001f;
-
-            Vector3 horizDir;
-            if (requireMovementInputForHorizontal)
-            {
-                horizDir = hasMoveNow ? moveDir.normalized : Vector3.zero;
-            }
-            else
-            {
-                Vector3 fallback = Vector3.ProjectOnPlane(transform.forward, up);
-                horizDir = (hasMoveNow ? moveDir : fallback).normalized;
-            }
-
-            if (horizDir.sqrMagnitude > 0.0001f && hMag > 0.001f)
-            {
-                horiz = horizDir * hMag;
-                newVel += horiz;
-            }
-
-            playerBody.velocity = newVel;
-
-            if (playerMovement && horiz.sqrMagnitude > 0.0001f)
-            {
-                playerMovement.HoldExternalHorizontal(horiz, 15f);
-                _wasBoostJumpThisLaunch = true;
-            }
-
-            cameraBoostFx?.OnLaunch(up);
-
-            // 🔸 spawn groundbreak at takeoff
-            SpawnGroundbreak();
+            float h = Input.GetAxisRaw("Horizontal");
+            float v = Input.GetAxisRaw("Vertical");
+            moveDir = new Vector3(h, 0f, v);
         }
 
-        if (playerMovement) playerMovement.SetExternalStopMovement(false);
-        if (playerMovement) playerMovement.NotifyJumped();
+        moveDir = Vector3.ProjectOnPlane(moveDir, up);
+        bool hasMoveNow = moveDir.sqrMagnitude > 0.0001f;
 
-        SetBoostAnim(_wasBoostJumpThisLaunch);
-        PlaySpeedlines();
-        StartCoroutine(BoostApexAndAfter());
+        Vector3 horizDir;
+        if (requireMovementInputForHorizontal)
+            horizDir = hasMoveNow ? moveDir.normalized : Vector3.zero;
+        else
+        {
+            Vector3 fallback = Vector3.ProjectOnPlane(transform.forward, up);
+            horizDir = (hasMoveNow ? moveDir : fallback).normalized;
+        }
+
+        if (horizDir.sqrMagnitude > 0.0001f && hMag > 0.001f)
+        {
+            horiz = horizDir * hMag;
+            newVel += horiz;
+        }
+
+        playerBody.velocity = newVel;
+
+        if (playerMovement && horiz.sqrMagnitude > 0.0001f)
+        {
+            playerMovement.HoldExternalHorizontal(horiz, 15f);
+            _wasBoostJumpThisLaunch = true;
+        }
+
+        cameraBoostFx?.OnLaunch(up);
+
+        // 🔸 spawn groundbreak at takeoff
+        SpawnGroundbreak();
     }
+
+    if (playerMovement) playerMovement.SetExternalStopMovement(false);
+    if (playerMovement) playerMovement.NotifyJumped();
+
+    SetBoostAnim(_wasBoostJumpThisLaunch);
+    PlaySpeedlines();
+    StartCoroutine(BoostApexAndAfter());
+
+    // 🔸 NEW: stop the charge visual when we actually launch
+    var jetpackEnd = GetComponentInParent<JetpackRare>(true);
+    jetpackEnd?.SetChargingVisuals(false);
+}
 
     // ── actions ──
 
     private void StartCharge(bool crouchHeldNow, bool spaceHeldNow)
+{
+    _charging  = true;
+    _holdTimer = 0f;
+    _hadMoveDuringCharge = false;
+
+    _prevCrouchHeld = crouchHeldNow;
+    _prevSpaceHeld  = spaceHeldNow;
+
+    if (playerBody)
     {
-        _charging  = true;
-        _holdTimer = 0f;
-        _hadMoveDuringCharge = false;
-
-        _prevCrouchHeld = crouchHeldNow;
-        _prevSpaceHeld  = spaceHeldNow;
-
-        if (playerBody)
-        {
-            Vector3 up   = GetUp();
-            Vector3 vert = Vector3.Project(playerBody.velocity, up);
-            playerBody.velocity = vert;
-        }
-
-        if (playerMovement) playerMovement.SetExternalStopMovement(true);
-        SuppressJump(true);
-        var dash = GetComponentInParent<PlayerDash>();
-        dash?.SetDashSuppressed(true);
-
-        LockFlightEntry(true);
-
-        cameraBoostFx?.OnChargeProgress(0f);
+        Vector3 up = GetUp();
+        Vector3 vert = Vector3.Project(playerBody.velocity, up);
+        playerBody.velocity = vert;
     }
 
-    private void CancelCharge()
-    {
-        if (!_charging) return;
+    if (playerMovement) playerMovement.SetExternalStopMovement(true);
+    SuppressJump(true);
+    var dash = GetComponentInParent<PlayerDash>();
+    dash?.SetDashSuppressed(true);
 
-        _charging  = false;
-        _holdTimer = 0f;
-        _hadMoveDuringCharge = false;
+    LockFlightEntry(true);
 
-        if (playerMovement) playerMovement.SetExternalStopMovement(false);
+    cameraBoostFx?.OnChargeProgress(0f);
 
-        SuppressJump(false);
-        var dash = GetComponentInParent<PlayerDash>();
-        dash?.SetDashSuppressed(false);
+    // 🔸 NEW: tell the jetpack to show/animate the energy balls
+    var jetpack = GetComponentInParent<JetpackRare>(true);
+    jetpack?.SetChargingVisuals(true);
+}
 
-        LockFlightEntry(false);
+// Cancel charging: turn OFF energy balls
+private void CancelCharge()
+{
+    if (!_charging) return;
 
-        SetBoostAnim(false);
-        cameraBoostFx?.OnChargeCancel();
+    _charging  = false;
+    _holdTimer = 0f;
+    _hadMoveDuringCharge = false;
 
-        StopSpeedlines();
-    }
+    if (playerMovement) playerMovement.SetExternalStopMovement(false);
+
+    SuppressJump(false);
+    var dash = GetComponentInParent<PlayerDash>();
+    dash?.SetDashSuppressed(false);
+
+    LockFlightEntry(false);
+
+    SetBoostAnim(false);
+    cameraBoostFx?.OnChargeCancel();
+
+    StopSpeedlines();
+
+    // 🔸 NEW
+    var jetpack = GetComponentInParent<JetpackRare>(true);
+    jetpack?.SetChargingVisuals(false);
+}
 
     private System.Collections.IEnumerator BoostApexAndAfter()
     {

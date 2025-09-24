@@ -11,6 +11,8 @@ using UnityEngine;
 ///   • Visible only while flying
 ///   • Instantly scales to holeScaleSuper while in super speed
 ///   • Smoothly shrinks back to holeScaleNormal over holeScaleShrinkDuration seconds
+///
+/// Plus: drives "EnergyBall" meshes under an optional "charges" parent.
 /// </summary>
 [DisallowMultipleComponent]
 public class JetpackRare : MonoBehaviour
@@ -53,6 +55,10 @@ public class JetpackRare : MonoBehaviour
     [Tooltip("Seconds to shrink from super → normal. Grow to super is instant.")]
     [SerializeField] private float holeScaleShrinkDuration = 1f;
 
+    [Header("Energy balls (optional)")]
+    [Tooltip("If assigned, EnergyBall components are searched under this root; otherwise searched under the jetpack.")]
+    [SerializeField] private Transform chargesRoot;
+
     // ── cached sets ──────────────────────────────────────────────────────────────
     private readonly List<Transform> _normalRoots = new();
     private readonly List<Transform> _superRoots  = new();
@@ -64,6 +70,9 @@ public class JetpackRare : MonoBehaviour
 
     // Thruster hole glow planes
     private readonly List<GameObject> _thrusterHoles = new();
+
+    // Energy balls
+    private readonly List<EnergyBall> _energyBalls = new();
 
     // state
     private bool  _wasFlying = false;
@@ -115,6 +124,10 @@ public class JetpackRare : MonoBehaviour
         _holeScaleTarget  = holeScaleNormal;
         SetHolesActive(false);
         SetHolesScale(_holeScaleCurrent);
+
+        // Energy balls: cache and ensure OFF by default
+        BuildEnergyBallCache();
+        SetChargingVisuals(false);
     }
 
     void Update()
@@ -243,6 +256,30 @@ public class JetpackRare : MonoBehaviour
 
         // ── Hole scale tween (only smooth when shrinking)
         TickHoleScale();
+    }
+
+    // ── EnergyBall helpers ─────────────────────────────────────
+
+    void BuildEnergyBallCache()
+    {
+        _energyBalls.Clear();
+
+        if (chargesRoot)
+            chargesRoot.GetComponentsInChildren(true, _energyBalls);   // include inactive
+        else
+            GetComponentsInChildren(true, _energyBalls);               // include inactive
+    }
+
+    /// <summary>Called by BoostJump to show/hide & animate the energy balls while charging.</summary>
+    public void SetChargingVisuals(bool charging)
+    {
+        if (_energyBalls.Count == 0) BuildEnergyBallCache();
+        for (int i = 0; i < _energyBalls.Count; i++)
+        {
+            var eb = _energyBalls[i];
+            if (!eb) continue;
+            eb.SetCharging(charging);
+        }
     }
 
     // ───────────────────────── helpers ─────────────────────────
