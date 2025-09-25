@@ -1,79 +1,217 @@
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Plays a flipbook on a mesh by sliding UVs over a texture atlas,
-/// and optionally changes the mesh scale per frame.
-/// Intended for a 3-frame intro (once) then a 4-frame loop while charging.
+/// One-stop EnergyBall controller:
+/// - Flipbook on a MeshRenderer material (Intro -> Loop)
+/// - Optional per-frame local scales (Intro + Loop + default fallback)
+/// - Optional charged flash as a SpriteRenderer that billboards to the camera
+/// - Visibility handled internally (ball on while charging or charged; off otherwise)
+///
+/// Call:
+///   SetCharging(true)  -> starts Intro, then Loop until SetCharging(false)
+///   SetCharged(true)   -> shows + animates flash sprite at 1.5× (configurable)
 /// </summary>
 [DisallowMultipleComponent]
 public class EnergyBall : MonoBehaviour
 {
-    [Header("Target")]
-    [SerializeField] private Renderer targetRenderer;   // if null, auto-get on this GO
-    [SerializeField] private int materialIndex = 0;     // which material slot
+    [Header("Target (Mesh Flipbook)")]
+    [SerializeField] private MeshRenderer targetRenderer;   // auto-find if empty
+    [SerializeField] private int          materialIndex = 0;
 
-    [Header("Atlas layout")]
-    [Tooltip("Number of columns (cells across) in the sprite sheet.")]
+    [Header("Atlas layout (grid counts)")]
+    [Tooltip("Columns (tiles across) in the flipbook atlas.")]
     [SerializeField] private int columns = 4;
-    [Tooltip("Number of rows (cells down) in the sprite sheet.")]
-    [SerializeField] private int rows    = 2; // set to 2 if you actually have >=5 frames
+    [Tooltip("Rows (tiles down) in the flipbook atlas.")]
+    [SerializeField] private int rows    = 1;
 
-    [Tooltip("URP uses _BaseMap, legacy uses _MainTex. We'll auto-pick.")]
-    [SerializeField] private string urpBaseMapName = "_BaseMap";
-    [SerializeField] private string legacyMainTex  = "_MainTex";
-    [Tooltip("If your sheet’s first row is at the top of the image, enable this.")]
+    [Tooltip("Row 0 is at the TOP of the atlas. If off, row 0 is at bottom.")]
+    [SerializeField] private bool rowZeroAtTop = true;
+
+    [Tooltip("Flip V (rarely needed). Leave OFF unless your atlas appears vertically inverted.")]
     [SerializeField] private bool flipV = false;
 
-    [Header("Timings")]
-    [SerializeField] private float framesPerSecond = 12f;
+    [Header("Shader texture slots")]
+    [Tooltip("URP Lit/BaseMap property name (used if present).")]
+    [SerializeField] private string urpBaseMapName = "_BaseMap";
+    [Tooltip("Legacy/BiRP _MainTex name (used if BaseMap is not present).")]
+    [SerializeField] private string legacyMainTexName = "_MainTex";
 
-    [Header("Frame order")]
-    [Tooltip("Intro: played once, then loop part begins.")]
-    [SerializeField] private List<int> introFrames = new() { 0, 1, 2 };
-    [Tooltip("Loop: repeats while charging.")]
-    [SerializeField] private List<int> loopFrames  = new() { 3, 4, 5, 6 };
+    [Header("Timing")]
+    [Tooltip("Flipbook FPS for Intro and Loop while CHARGING.")]
+    [SerializeField] private float framesPerSecond = 10f;
+
+    [Header("Frame order (1-based tile indices)")]
+    [Tooltip("Intro plays once (indices are 1..columns*rows).")]
+    [SerializeField] private List<int> introFrames = new();
+    [Tooltip("Loop repeats while charging (indices are 1..columns*rows).")]
+    [SerializeField] private List<int> loopFrames  = new();
 
     [Header("Per-frame scales (optional)")]
-    [Tooltip("Per-intro-frame local scale; if missing, falls back to defaultScale.")]
-    [SerializeField] private List<Vector3> introScales = new() {
-        new Vector3(35,35,45),
-        new Vector3(42,42,50),
-        new Vector3(50,50,55),
-    };
+    [Tooltip("If provided, overrides local scale per Intro frame.")]
+    [SerializeField] private List<Vector3> introScales = new();
+    [Tooltip("If provided, overrides local scale per Loop frame.")]
+    [SerializeField] private List<Vector3> loopScales  = new();
+    [Tooltip("Fallback local scale when a per-frame scale is not specified.")]
+    [SerializeField] private Vector3 defaultScale = new Vector3(50, 70, 60);
 
-    [Tooltip("Per-loop-frame local scale; if missing, falls back to defaultScale.")]
-    [SerializeField] private List<Vector3> loopScales  = new() {
-        new Vector3(40,40,50), // frame index 3
-        new Vector3(49,49,51), // 4
-        new Vector3(45,45,55), // 5
-        new Vector3(40,40,50), // 6
-    };
+    [Header("Visibility")]
+    [Tooltip("Disable mesh when neither charging nor charged.")]
+    [SerializeField] private bool hideMeshWhenIdle = true;
 
-    [SerializeField] private Vector3 defaultScale = new Vector3(50,50,50);
+    // ───────────────── Flash sprite (optional) ─────────────────
+    [Header("Charged Flash (optional Sprite)")]
+    [SerializeField] private SpriteRenderer flashRenderer;      // auto-find in children
+    [SerializeField] private List<Sprite>   flashFrames = new();
+    [Tooltip("Base playback rate for the flash sprite while charged.")]
+    [SerializeField] private float flashBaseFps = 12f;
+    [Tooltip("Speed multiplier applied while charged (e.g., 1.5×).")]
+    [SerializeField] private float chargedSpeedMultiplier = 1.5f;
+    [Tooltip("Hide the flash sprite when not charged.")]
+    [SerializeField] private bool hideFlashWhenNotCharged = true;
 
-    // ───────── state ─────────
-    private Material _instancedMat;
-    private int _texPropId = -1;
-    private bool _charging  = false;
-    private Coroutine _playCo;
+    [Header("Billboarding")]
+    [SerializeField] private bool   billboardFlashToCamera = true;
+    [SerializeField] private Camera cameraOverride;            // auto-find
+
+    // ── runtime state ──────────────────────────────────────────
+    Material _mat;                // dedicated instance
+    int _texId = -1;              // cached property id
+
+    Vector2 _tileScale;
+    float   _meshClock;
+    int     _introCursor;
+    int     _loopCursor;
+    bool    _introDone;
+
+    bool _charging;
+    bool _charged;
+
+    // Flash state
+    int   _flashIndex;
+    float _flashClock;
 
     void Awake()
     {
-        if (!targetRenderer) targetRenderer = GetComponent<Renderer>();
-        EnsureMaterialInstance();
-        HideRenderer();
+        // Mesh renderer
+        if (!targetRenderer)
+            targetRenderer = GetComponent<MeshRenderer>();
+
+        // Make a safe material instance (no global changes)
+        if (targetRenderer && targetRenderer.sharedMaterials != null)
+        {
+            var mats = targetRenderer.materials; // clones array & instances
+            if (materialIndex < 0 || materialIndex >= mats.Length)
+            {
+                Debug.LogWarning($"[EnergyBall] materialIndex {materialIndex} out of range on '{name}'.", this);
+            }
+            else
+            {
+                _mat = mats[materialIndex];
+                targetRenderer.materials = mats; // assign back to apply instances
+            }
+        }
+
+        // Choose texture slot once
+        if (_mat)
+        {
+            if (_mat.HasProperty(urpBaseMapName)) _texId = Shader.PropertyToID(urpBaseMapName);
+            else if (_mat.HasProperty(legacyMainTexName)) _texId = Shader.PropertyToID(legacyMainTexName);
+            else _texId = -1;
+
+            _tileScale = new Vector2(columns > 0 ? 1f / columns : 1f, rows > 0 ? 1f / rows : 1f);
+            ApplyTiling(_tileScale);
+        }
+
+        // Flash sprite auto-bind
+        if (!flashRenderer)
+            flashRenderer = GetComponentInChildren<SpriteRenderer>(true);
+
+        // Camera auto-bind for billboarding
+        if (!cameraOverride)
+        {
+            if (Camera.main) cameraOverride = Camera.main;
+            else
+            {
+                var anyCam = FindObjectOfType<Camera>(true);
+                if (anyCam) cameraOverride = anyCam;
+            }
+        }
+
+        // Initial visibility
+        EnsureMeshVisible(!_charging && !_charged ? !hideMeshWhenIdle : true);
+        ApplyFlashVisibility();
+        ResetMeshAnim();
+        ResetFlashAnim();
     }
 
-    void OnDisable()
+    void Update()
     {
-        if (_playCo != null) StopCoroutine(_playCo);
-        _playCo = null;
-        _charging = false;
+        // ── Mesh flipbook (charging only) ──────────────────────
+        if (_charging && _mat && (_texId != -1))
+        {
+            float step = Mathf.Max(0.01f, framesPerSecond) * Time.deltaTime;
+            _meshClock += step;
+
+            while (_meshClock >= 1f)
+            {
+                _meshClock -= 1f;
+
+                if (!_introDone && introFrames.Count > 0)
+                {
+                    _introCursor++;
+                    if (_introCursor >= introFrames.Count)
+                    {
+                        // Finished intro → move to loop
+                        _introDone = true;
+                        _loopCursor = 0;
+                        if (loopFrames.Count > 0)
+                            ApplyMeshFrame(loopFrames[_loopCursor], GetLoopScale(_loopCursor));
+                        else
+                            ApplyMeshFrame(introFrames[introFrames.Count - 1], defaultScale);
+                        break;
+                    }
+                    ApplyMeshFrame(introFrames[_introCursor], GetIntroScale(_introCursor));
+                }
+                else
+                {
+                    if (loopFrames.Count == 0) break;
+                    _loopCursor = (_loopCursor + 1) % loopFrames.Count;
+                    ApplyMeshFrame(loopFrames[_loopCursor], GetLoopScale(_loopCursor));
+                }
+            }
+        }
+
+        // ── Charged flash sprite ───────────────────────────────
+        if (_charged && flashRenderer && flashFrames.Count > 0)
+        {
+            float fps = Mathf.Max(0.01f, flashBaseFps * chargedSpeedMultiplier);
+            _flashClock += fps * Time.deltaTime;
+            while (_flashClock >= 1f)
+            {
+                _flashClock -= 1f;
+                _flashIndex = (_flashIndex + 1) % flashFrames.Count;
+                flashRenderer.sprite = flashFrames[_flashIndex];
+            }
+        }
     }
 
-    // Called by JetpackRare
+    void LateUpdate()
+    {
+        if (!_charged || !billboardFlashToCamera || !flashRenderer || !cameraOverride) return;
+
+        // Billboard the flash sprite to camera
+        Vector3 toCam = cameraOverride.transform.position - flashRenderer.transform.position;
+        if (toCam.sqrMagnitude > 1e-6f)
+        {
+            flashRenderer.transform.rotation =
+                Quaternion.LookRotation(-toCam.normalized, cameraOverride.transform.up);
+        }
+    }
+
+    // ───────────────────── public API ─────────────────────────
+
+    /// <summary>Start/stop the charging visuals. When starting, runs Intro then Loop.</summary>
     public void SetCharging(bool on)
     {
         if (on == _charging) return;
@@ -81,142 +219,122 @@ public class EnergyBall : MonoBehaviour
 
         if (_charging)
         {
-            EnsureMaterialInstance();
-            ShowRenderer();
-            if (_playCo != null) StopCoroutine(_playCo);
-            _playCo = StartCoroutine(Co_Play());
+            EnsureMeshVisible(true);
+            ResetMeshAnim();
+
+            // Apply first frame immediately for snappy response
+            if (introFrames.Count > 0)
+                ApplyMeshFrame(introFrames[0], GetIntroScale(0));
+            else if (loopFrames.Count > 0)
+                ApplyMeshFrame(loopFrames[0], GetLoopScale(0));
         }
         else
         {
-            if (_playCo != null) StopCoroutine(_playCo);
-            _playCo = null;
-            HideRenderer();
+            ResetMeshAnim();
+            if (!_charged && hideMeshWhenIdle)
+                EnsureMeshVisible(false);
         }
     }
 
-    IEnumerator Co_Play()
+    /// <summary>Show/hide & animate the charged flash sprite.</summary>
+    public void SetCharged(bool on)
     {
-        float dt = 1f / Mathf.Max(0.0001f, framesPerSecond);
+        if (on == _charged) return;
+        _charged = on;
 
-        // 1) Intro (once)
-        for (int i = 0; i < introFrames.Count; i++)
+        if (_charged)
         {
-            int frame = introFrames[i];
-            ApplyFrame(frame);
-            ApplyIntroScale(i);
-            yield return new WaitForSeconds(dt);
+            ResetFlashAnim();
+            ApplyFlashVisibility();
+
+            // Make sure the mesh stays visible while charged,
+            // unless you want it hidden—flip this to false if desired:
+            EnsureMeshVisible(true);
         }
-
-        // 2) Loop (repeat while charging)
-        int li = 0;
-        while (_charging)
+        else
         {
-            if (loopFrames == null || loopFrames.Count == 0)
-            {
-                yield return null; // nothing to do, avoid tight loop
-                continue;
-            }
+            ResetFlashAnim();
+            ApplyFlashVisibility();
 
-            int frame = loopFrames[li];
-            ApplyFrame(frame);
-            ApplyLoopScale(li);
-
-            li++;
-            if (li >= loopFrames.Count) li = 0;
-
-            yield return new WaitForSeconds(dt);
+            if (!_charging && hideMeshWhenIdle)
+                EnsureMeshVisible(false);
         }
     }
 
-    // ───────── helpers ─────────
+    // ─────────────────── internal helpers ─────────────────────
 
-    void EnsureMaterialInstance()
+    void ResetMeshAnim()
+    {
+        _meshClock   = 0f;
+        _introCursor = 0;
+        _loopCursor  = 0;
+        _introDone   = introFrames.Count == 0;
+    }
+
+    void ResetFlashAnim()
+    {
+        _flashClock = 0f;
+        _flashIndex = 0;
+        if (flashRenderer && flashFrames.Count > 0)
+            flashRenderer.sprite = flashFrames[0];
+    }
+
+    void EnsureMeshVisible(bool on)
     {
         if (!targetRenderer) return;
-
-        // pick material slot
-        var mats = targetRenderer.materials; // creates instances (good)
-        if (materialIndex < 0 || materialIndex >= mats.Length)
-            materialIndex = 0;
-
-        _instancedMat = mats[materialIndex];
-
-        // choose texture property
-        if (_instancedMat != null)
-        {
-            if (_instancedMat.HasProperty(urpBaseMapName))
-                _texPropId = Shader.PropertyToID(urpBaseMapName);
-            else if (_instancedMat.HasProperty(legacyMainTex))
-                _texPropId = Shader.PropertyToID(legacyMainTex);
-            else
-                _texPropId = -1;
-
-            // Set the per-cell tiling once (assuming evenly spaced grid)
-            Vector2 tiling = new Vector2(1f / Mathf.Max(1, columns),
-                                         1f / Mathf.Max(1, rows));
-            if (_texPropId != -1)
-                _instancedMat.SetTextureScale(_texPropId, tiling);
-        }
-
-        // reassign to ensure the instance is used
-        mats[materialIndex] = _instancedMat;
-        targetRenderer.materials = mats;
+        targetRenderer.enabled = on;
     }
 
-    void ApplyFrame(int frameIndex)
+    void ApplyFlashVisibility()
     {
-        if (_instancedMat == null || _texPropId == -1) return;
-
-        int total = Mathf.Max(1, columns * rows);
-        if (frameIndex < 0 || frameIndex >= total)
-        {
-            // guard: wrap into range and warn once
-            int wrapped = Mathf.FloorToInt(Mathf.Repeat(frameIndex, total));
-            Debug.LogWarning($"[EnergyBall] Frame {frameIndex} out of atlas range (total {total}). Wrapping to {wrapped}.", this);
-            frameIndex = wrapped;
-        }
-
-        int col = frameIndex % columns;
-        int row = frameIndex / columns;
-
-        float u = (float)col / Mathf.Max(1, columns);
-        float v = (float)row / Mathf.Max(1, rows);
-        if (flipV)
-        {
-            // flip vertically: count rows from top
-            v = 1f - (1f / Mathf.Max(1, rows)) - v;
-        }
-
-        // apply offset
-        _instancedMat.SetTextureOffset(_texPropId, new Vector2(u, v));
+        if (!flashRenderer) return;
+        flashRenderer.enabled = _charged || !hideFlashWhenNotCharged;
     }
 
-    void ApplyIntroScale(int introIndex)
+    Vector3 GetIntroScale(int idx)
     {
-        Vector3 s = (introIndex >= 0 && introIndex < introScales.Count)
-            ? introScales[introIndex]
-            : defaultScale;
-        transform.localScale = s;
+        if (idx >= 0 && idx < introScales.Count) return introScales[idx];
+        return defaultScale;
+    }
+    Vector3 GetLoopScale(int idx)
+    {
+        if (idx >= 0 && idx < loopScales.Count) return loopScales[idx];
+        return defaultScale;
     }
 
-    void ApplyLoopScale(int loopIndex)
+    void ApplyMeshFrame(int oneBasedTileIndex, Vector3 scale)
     {
-        Vector3 s = (loopIndex >= 0 && loopIndex < loopScales.Count)
-            ? loopScales[loopIndex]
-            : defaultScale;
-        transform.localScale = s;
+        if (_mat == null || _texId == -1 || columns <= 0 || rows <= 0) return;
+
+        int total = columns * rows;
+        int clamped = Mathf.Clamp(oneBasedTileIndex, 1, Mathf.Max(1, total));
+        int zero    = clamped - 1;
+
+        int col = zero % columns;
+        int row = zero / columns;
+
+        // Convert to UV offset (bottom-left origin in Unity)
+        float u = col * _tileScale.x;
+
+        float v;
+        if (rowZeroAtTop)
+            v = (1f - _tileScale.y) - (row * _tileScale.y); // top row = highest V
+        else
+            v = row * _tileScale.y;
+
+        if (flipV) v = 1f - _tileScale.y - v;
+
+        _mat.SetTextureScale(_texId, _tileScale);
+        _mat.SetTextureOffset(_texId, new Vector2(u, v));
+
+        transform.localScale = scale;
     }
 
-    void ShowRenderer()
+    void ApplyTiling(Vector2 tiling)
     {
-        if (!targetRenderer) return;
-        targetRenderer.enabled = true;
-    }
-
-    void HideRenderer()
-    {
-        if (!targetRenderer) return;
-        targetRenderer.enabled = false;
+        if (_mat == null || _texId == -1) return;
+        _mat.SetTextureScale(_texId, tiling);
+        _mat.SetTextureOffset(_texId, Vector2.zero);
     }
 
 #if UNITY_EDITOR
@@ -225,7 +343,8 @@ public class EnergyBall : MonoBehaviour
         columns = Mathf.Max(1, columns);
         rows    = Mathf.Max(1, rows);
         framesPerSecond = Mathf.Max(0.01f, framesPerSecond);
-        if (!targetRenderer) targetRenderer = GetComponent<Renderer>();
+        flashBaseFps    = Mathf.Max(0.01f, flashBaseFps);
+        chargedSpeedMultiplier = Mathf.Max(0.01f, chargedSpeedMultiplier);
     }
 #endif
 }

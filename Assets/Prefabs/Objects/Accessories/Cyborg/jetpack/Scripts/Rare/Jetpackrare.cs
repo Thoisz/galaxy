@@ -86,10 +86,15 @@ public class JetpackRare : MonoBehaviour
     // reflection cache
     private FieldInfo _fiFast, _fiSuper, _fiSuperActive, _fiIdleAscending;
 
+    private EnergyBallFlash[] _flashes;
+
+    private readonly List<MeshRenderer> _energyBallMeshRenderers = new();
+
     // ─────────────────────────────────────────────────────────────────────────────
 
     void Awake()
-    {
+    { 
+        _flashes = GetComponentsInChildren<EnergyBallFlash>(true);
         if (!playerFlight) playerFlight = GetComponentInParent<PlayerFlight>();
         if (!playerBody)   playerBody   = GetComponentInParent<Rigidbody>();
 
@@ -258,17 +263,47 @@ public class JetpackRare : MonoBehaviour
         TickHoleScale();
     }
 
-    // ── EnergyBall helpers ─────────────────────────────────────
-
     void BuildEnergyBallCache()
-    {
-        _energyBalls.Clear();
+{
+    _energyBalls.Clear();
+    _energyBallMeshRenderers.Clear();
 
-        if (chargesRoot)
-            chargesRoot.GetComponentsInChildren(true, _energyBalls);   // include inactive
-        else
-            GetComponentsInChildren(true, _energyBalls);               // include inactive
+    Transform root = chargesRoot ? chargesRoot : transform;
+
+    // EnergyBall components (if any still exist)
+    root.GetComponentsInChildren(true, _energyBalls);
+
+    // MeshRenderers that look like the orb meshes
+    foreach (var mr in root.GetComponentsInChildren<MeshRenderer>(true))
+    {
+        var n = mr.gameObject.name.ToLowerInvariant();
+        if (n.Contains("energyball")) _energyBallMeshRenderers.Add(mr);
     }
+}
+
+/// <summary>
+/// Show/hide the visible orb meshes while charging.
+/// Works whether or not the old EnergyBall component exists.
+/// </summary>
+public void SetEnergyBallMeshesVisible(bool on)
+{
+    if (_energyBallMeshRenderers.Count == 0) BuildEnergyBallCache();
+    for (int i = 0; i < _energyBallMeshRenderers.Count; i++)
+    {
+        var mr = _energyBallMeshRenderers[i];
+        if (!mr) continue;
+        mr.enabled = on;
+    }
+
+    // If you kept the old EnergyBall script on some objects, still forward the call:
+    if (_energyBalls.Count == 0) BuildEnergyBallCache();
+    for (int i = 0; i < _energyBalls.Count; i++)
+    {
+        var eb = _energyBalls[i];
+        if (!eb) continue;
+        eb.SetCharging(on);
+    }
+}
 
     /// <summary>Called by BoostJump to show/hide & animate the energy balls while charging.</summary>
     public void SetChargingVisuals(bool charging)
@@ -465,6 +500,30 @@ public class JetpackRare : MonoBehaviour
                       Mathf.Abs(Input.GetAxis("Vertical"))   < 0.001f;
         return noWASD && Input.GetKey(KeyCode.Space);
     }
+
+    /// <summary>
+/// Turn the charged flash (EnergyBallFlash children) on/off.
+/// Called by BoostJump when charge hits 100% or is canceled/launched.
+/// </summary>
+public void SetChargedFlash(bool on)
+{
+    // Ensure cache
+    if (_flashes == null || _flashes.Length == 0)
+        _flashes = GetComponentsInChildren<EnergyBallFlash>(true);
+
+    // Drive all flashes
+    for (int i = 0; i < _flashes.Length; i++)
+    {
+        var f = _flashes[i];
+        if (!f) continue;
+
+        // Make sure the GO is enabled so the SpriteRenderer can show
+        if (on && !f.gameObject.activeSelf)
+            f.gameObject.SetActive(true);
+
+        f.SetCharged(on);
+    }
+}
 
 #if UNITY_EDITOR
     void OnValidate()

@@ -66,7 +66,9 @@ public class BoostJump : MonoBehaviour
     [Tooltip("If true and prefab isn’t assigned, will try Resources.Load(\"FX_groundbreak\"). Place your prefab in a Resources folder.")]
     [SerializeField] private bool tryResourcesLoad = true;
 
-    [SerializeField] private JetpackRare jetpackRare; // optional; auto-found
+    [SerializeField] private JetpackRare jetpackRare; // auto-found in Awake if left empty
+    private bool _chargedFlashOn = false;             // internal toggle state
+
 
     // ── internals ──
     private float _holdTimer = 0f;
@@ -104,10 +106,6 @@ public class BoostJump : MonoBehaviour
     if (!playerMovement) playerMovement = GetComponentInParent<PlayerMovement>();
     if (!playerJump)     playerJump     = GetComponentInParent<PlayerJump>();
 
-    // Auto-bind JetpackRare (so we can drive energy balls)
-    if (!jetpackRare) jetpackRare = GetComponentInParent<JetpackRare>();
-
-    // Find a camera (for base FOV only)
     if (!playerCam)
     {
         var rig = GetComponentInParent<PlayerCamera>(true);
@@ -119,7 +117,6 @@ public class BoostJump : MonoBehaviour
         if (!playerCam && Camera.main) playerCam = Camera.main;
     }
 
-    // Bind a gravity provider method, if any
     if (!gravityBody) gravityBody = GetComponentInParent<GravityBody>();
     if (gravityBody)
     {
@@ -129,7 +126,6 @@ public class BoostJump : MonoBehaviour
         );
     }
 
-    // Bind PlayerFlight.EnterFlight() if present
     if (playerFlight)
     {
         _miEnterFlight = playerFlight.GetType().GetMethod(
@@ -137,6 +133,10 @@ public class BoostJump : MonoBehaviour
             BindingFlags.Instance | BindingFlags.NonPublic
         );
     }
+
+    // NEW: find the jetpack FX driver that owns the EnergyBallFlash children
+    if (!jetpackRare) jetpackRare = GetComponentInParent<JetpackRare>(true);
+    jetpackRare?.SetChargedFlash(false); // ensure off at boot
 
     TryBindCameraBoostFx();
 
@@ -147,9 +147,6 @@ public class BoostJump : MonoBehaviour
     SetBoostAnim(false);
 
     EnsureGroundbreakPrefabBound();
-
-    // ensure energy balls start off
-    jetpackRare?.SetChargingVisuals(false);
 }
 
     private void OnEnable()
@@ -164,6 +161,10 @@ public class BoostJump : MonoBehaviour
 
     private void OnDisable()
 {
+    _chargedFlashOn = false;
+    jetpackRare?.SetChargedFlash(false);
+    jetpackRare?.SetEnergyBallMeshesVisible(false);
+
     _charging  = false;
     _holdTimer = 0f;
     _hadMoveDuringCharge = false;
@@ -175,13 +176,14 @@ public class BoostJump : MonoBehaviour
     }
     if (playerJump) playerJump.SetJumpSuppressed(false);
 
-    // Make sure charging visuals stop if we get disabled mid-charge
-    jetpackRare?.SetChargingVisuals(false);
-
     LockFlightEntry(false);
 
     SetBoostAnim(false);
     cameraBoostFx?.OnChargeCancel();
+
+    // hard stop the flash if object disables
+    _chargedFlashOn = false;
+    jetpackRare?.SetChargedFlash(false);
 
     StopSpeedlines();
 }
@@ -231,25 +233,33 @@ public class BoostJump : MonoBehaviour
     }
 
     private void FixedUpdate()
+{
+    if (!_charging) return;
+
+    _holdTimer += Time.fixedDeltaTime;
+
+    if (playerBody)
     {
-        if (!_charging) return;
-
-        _holdTimer += Time.fixedDeltaTime;
-
-        if (playerBody)
-        {
-            Vector3 up   = GetUp();
-            Vector3 v    = playerBody.velocity;
-            Vector3 vert = Vector3.Project(v, up);
-            playerBody.velocity = vert;
-        }
-
-        if (cameraBoostFx)
-        {
-            float t = chargeTimeSeconds <= 0f ? 1f : Mathf.Clamp01(_holdTimer / chargeTimeSeconds);
-            cameraBoostFx.OnChargeProgress(t);
-        }
+        Vector3 up   = GetUp();
+        Vector3 v    = playerBody.velocity;
+        Vector3 vert = Vector3.Project(v, up);
+        playerBody.velocity = vert;
     }
+
+    // normalized charge 0..1
+    float t = chargeTimeSeconds <= 0f ? 1f : Mathf.Clamp01(_holdTimer / chargeTimeSeconds);
+
+    // update camera FX
+    if (cameraBoostFx) cameraBoostFx.OnChargeProgress(t);
+
+    // turn the flash on only when fully charged; off otherwise
+    bool nowFull = (t >= 1f - 1e-4f);
+    if (nowFull != _chargedFlashOn)
+    {
+        _chargedFlashOn = nowFull;
+        jetpackRare?.SetChargedFlash(_chargedFlashOn);
+    }
+}
 
     private void LateUpdate()
     {
@@ -261,6 +271,14 @@ public class BoostJump : MonoBehaviour
 {
     _charging = false;
     _wasBoostJumpThisLaunch = false;
+
+    _chargedFlashOn = false;
+    jetpackRare?.SetChargedFlash(false);
+    jetpackRare?.SetEnergyBallMeshesVisible(false);  // <- hide orb when not charging
+
+    // flash should stop at launch
+    _chargedFlashOn = false;
+    jetpackRare?.SetChargedFlash(false);
 
     Vector3 horiz = Vector3.zero;
 
@@ -288,7 +306,9 @@ public class BoostJump : MonoBehaviour
 
         Vector3 horizDir;
         if (requireMovementInputForHorizontal)
+        {
             horizDir = hasMoveNow ? moveDir.normalized : Vector3.zero;
+        }
         else
         {
             Vector3 fallback = Vector3.ProjectOnPlane(transform.forward, up);
@@ -311,7 +331,7 @@ public class BoostJump : MonoBehaviour
 
         cameraBoostFx?.OnLaunch(up);
 
-        // 🔸 spawn groundbreak at takeoff
+        // spawn groundbreak at takeoff
         SpawnGroundbreak();
     }
 
@@ -321,10 +341,6 @@ public class BoostJump : MonoBehaviour
     SetBoostAnim(_wasBoostJumpThisLaunch);
     PlaySpeedlines();
     StartCoroutine(BoostApexAndAfter());
-
-    // 🔸 NEW: stop the charge visual when we actually launch
-    var jetpackEnd = GetComponentInParent<JetpackRare>(true);
-    jetpackEnd?.SetChargingVisuals(false);
 }
 
     // ── actions ──
@@ -340,7 +356,7 @@ public class BoostJump : MonoBehaviour
 
     if (playerBody)
     {
-        Vector3 up = GetUp();
+        Vector3 up   = GetUp();
         Vector3 vert = Vector3.Project(playerBody.velocity, up);
         playerBody.velocity = vert;
     }
@@ -352,16 +368,24 @@ public class BoostJump : MonoBehaviour
 
     LockFlightEntry(true);
 
+    // reset flash state on new charge
+    _chargedFlashOn = false;
+    jetpackRare?.SetChargedFlash(false);
+
     cameraBoostFx?.OnChargeProgress(0f);
 
-    // 🔸 NEW: tell the jetpack to show/animate the energy balls
-    var jetpack = GetComponentInParent<JetpackRare>(true);
-    jetpack?.SetChargingVisuals(true);
+    _chargedFlashOn = false;
+        jetpackRare?.SetChargedFlash(false);
+    jetpackRare?.SetEnergyBallMeshesVisible(true);   // <- show orb while charging
 }
 
 // Cancel charging: turn OFF energy balls
 private void CancelCharge()
 {
+    _chargedFlashOn = false;
+    jetpackRare?.SetChargedFlash(false);
+    jetpackRare?.SetEnergyBallMeshesVisible(false);  // <- hide orb when not charging
+
     if (!_charging) return;
 
     _charging  = false;
@@ -379,11 +403,11 @@ private void CancelCharge()
     SetBoostAnim(false);
     cameraBoostFx?.OnChargeCancel();
 
-    StopSpeedlines();
+    // ensure flash is off when canceling
+    _chargedFlashOn = false;
+    jetpackRare?.SetChargedFlash(false);
 
-    // 🔸 NEW
-    var jetpack = GetComponentInParent<JetpackRare>(true);
-    jetpack?.SetChargingVisuals(false);
+    StopSpeedlines();
 }
 
     private System.Collections.IEnumerator BoostApexAndAfter()
