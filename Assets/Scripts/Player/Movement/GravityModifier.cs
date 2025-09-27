@@ -5,12 +5,16 @@ public class GravityModifier : MonoBehaviour
     [Header("References")]
     [SerializeField] private PlayerMovement _playerMovement;
     [SerializeField] private PlayerJump _playerJump;
+    [SerializeField] private PlayerDash _playerDash; // NEW: to detect dash
 
     [Header("Gravity Settings")]
     [SerializeField] private float _baseGravityMultiplier = 1.0f;
     [SerializeField] private float _fallingGravityMultiplier = 1.5f;
     [SerializeField] private float _fastFallingGravityMultiplier = 2.0f;
-    [SerializeField] private float _fastFallVelocityThreshold = -8f;
+
+    [Tooltip("Speed along gravity (+) considered 'fast fall'. Use a POSITIVE value.")]
+    [SerializeField] private float _fastFallVelocityThreshold = 8f; // FIX: positive
+
     [SerializeField] private float _terminalVelocity = -50f;
 
     // Private references
@@ -20,85 +24,83 @@ public class GravityModifier : MonoBehaviour
 
     private void Start()
     {
-        // Get components
-        _rigidbody = GetComponent<Rigidbody>();
+        _rigidbody   = GetComponent<Rigidbody>();
         _gravityBody = GetComponent<GravityBody>();
-        
-        // Find player movement script if not assigned
-        if (_playerMovement == null)
-            _playerMovement = GetComponent<PlayerMovement>();
-            
-        // Find jump controller if not assigned
-        if (_playerJump == null)
-            _playerJump = GetComponent<PlayerJump>();
-            
-        // Store default gravity force
+
+        if (_playerMovement == null) _playerMovement = GetComponent<PlayerMovement>();
+        if (_playerJump == null)     _playerJump     = GetComponent<PlayerJump>();
+        if (_playerDash == null)     _playerDash     = GetComponent<PlayerDash>(); // NEW
+
+        // Read GravityBody.gravityForce via reflection (kept from your original)
         if (_gravityBody != null)
         {
-            // Using reflection to get the private field's value
-            // This is a bit of a hack, but allows us to access the gravityBody's force value
-            System.Reflection.FieldInfo field = typeof(GravityBody).GetField("gravityForce", 
-                System.Reflection.BindingFlags.NonPublic | 
-                System.Reflection.BindingFlags.Instance);
-                
-            if (field != null)
-                _defaultGravityForce = (float)field.GetValue(_gravityBody);
-            else
-                _defaultGravityForce = 800f; // Fallback to default value in GravityBody
+            System.Reflection.FieldInfo field = typeof(GravityBody).GetField(
+                "gravityForce",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+            );
+            _defaultGravityForce = field != null ? (float)field.GetValue(_gravityBody) : 800f;
+        }
+        else
+        {
+            _defaultGravityForce = 800f;
         }
     }
 
     private void FixedUpdate()
     {
         if (_gravityBody == null) return;
-        
+
         ApplyGravityModifiers();
         ApplyTerminalVelocity();
     }
 
     private void ApplyGravityModifiers()
     {
-        // Skip if not falling
-        if (_playerMovement.IsGrounded())
-            return;
-            
-        // Get velocity in gravity direction
+        // No extra gravity when grounded
+        if (_playerMovement != null && _playerMovement.IsGrounded()) return;
+
+        // NEW: Skip extra gravity while dashing so dash can control vertical behavior cleanly
+        if (_playerDash != null && _playerDash.IsDashing()) return;
+
         Vector3 gravityDir = _gravityBody.GravityDirection.normalized;
-        float velocityInGravityDirection = Vector3.Dot(_rigidbody.velocity, gravityDir);
-        
-        // Determine current jump state and apply appropriate gravity multiplier
+
+        // Positive when moving **with** gravity (i.e., falling)
+        float vAlongGravity = Vector3.Dot(_rigidbody.velocity, gravityDir);
+
+        // Default
         float gravityMultiplier = _baseGravityMultiplier;
-        
+
         // Apply stronger gravity when falling
-        if (velocityInGravityDirection > 0.1f) // Positive value means falling toward gravity
+        if (vAlongGravity > 0.1f)
         {
-            // Apply extra gravity when falling
             gravityMultiplier = _fallingGravityMultiplier;
-            
-            // Apply even more gravity when falling fast
-            if (velocityInGravityDirection > _fastFallVelocityThreshold)
+
+            // FAST-FALL: compare to a POSITIVE threshold
+            if (vAlongGravity > _fastFallVelocityThreshold)
                 gravityMultiplier = _fastFallingGravityMultiplier;
         }
-        
-        // Apply extra gravity force
+
+        // Add only the extra gravity beyond default
         float extraGravity = (_defaultGravityForce * gravityMultiplier) - _defaultGravityForce;
-        _rigidbody.AddForce(gravityDir * extraGravity * Time.fixedDeltaTime, ForceMode.Acceleration);
+        if (extraGravity > 0f)
+        {
+            _rigidbody.AddForce(gravityDir * extraGravity * Time.fixedDeltaTime, ForceMode.Acceleration);
+        }
+        // If you ever want lighter-than-default while rising, you could allow negative extraGravity too.
     }
 
     private void ApplyTerminalVelocity()
     {
-        // Limit falling speed to terminal velocity
         Vector3 gravityDir = _gravityBody.GravityDirection.normalized;
-        float velocityInGravityDirection = Vector3.Dot(_rigidbody.velocity, gravityDir);
-        
-        // If exceeding terminal velocity in gravity direction
-        if (velocityInGravityDirection > Mathf.Abs(_terminalVelocity))
+        float vAlongGravity = Vector3.Dot(_rigidbody.velocity, gravityDir);
+
+        // Clamp downward speed to |terminalVelocity|
+        float maxDownSpeed = Mathf.Abs(_terminalVelocity); // e.g., 50
+        if (vAlongGravity > maxDownSpeed)
         {
-            // Calculate how much velocity to remove
-            float excessVelocity = velocityInGravityDirection - Mathf.Abs(_terminalVelocity);
-            
-            // Apply opposing force to limit velocity
-            _rigidbody.AddForce(-gravityDir * excessVelocity, ForceMode.VelocityChange);
+            float excess = vAlongGravity - maxDownSpeed;
+            // Instantly remove the excess along gravity
+            _rigidbody.AddForce(-gravityDir * excess, ForceMode.VelocityChange);
         }
     }
 }
