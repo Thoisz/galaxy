@@ -252,12 +252,17 @@ public class BoostJump : MonoBehaviour
     // update camera FX
     if (cameraBoostFx) cameraBoostFx.OnChargeProgress(t);
 
-    // turn the flash on only when fully charged; off otherwise
+    // fully charged?
     bool nowFull = (t >= 1f - 1e-4f);
     if (nowFull != _chargedFlashOn)
     {
         _chargedFlashOn = nowFull;
+
+        // your old flash toggle (keep if you still use it)
         jetpackRare?.SetChargedFlash(_chargedFlashOn);
+
+        // NEW: dust is ON while charging, OFF when full
+        jetpackRare?.SetChargeDustVisible(!_chargedFlashOn);
     }
 }
 
@@ -274,11 +279,10 @@ public class BoostJump : MonoBehaviour
 
     _chargedFlashOn = false;
     jetpackRare?.SetChargedFlash(false);
-    jetpackRare?.SetEnergyBallMeshesVisible(false);  // <- hide orb when not charging
 
-    // flash should stop at launch
-    _chargedFlashOn = false;
-    jetpackRare?.SetChargedFlash(false);
+    // hide orb + DUST when launching
+    jetpackRare?.SetEnergyBallMeshesVisible(false);
+    jetpackRare?.SetChargeDustVisible(false);
 
     Vector3 horiz = Vector3.zero;
 
@@ -306,9 +310,7 @@ public class BoostJump : MonoBehaviour
 
         Vector3 horizDir;
         if (requireMovementInputForHorizontal)
-        {
             horizDir = hasMoveNow ? moveDir.normalized : Vector3.zero;
-        }
         else
         {
             Vector3 fallback = Vector3.ProjectOnPlane(transform.forward, up);
@@ -330,8 +332,6 @@ public class BoostJump : MonoBehaviour
         }
 
         cameraBoostFx?.OnLaunch(up);
-
-        // spawn groundbreak at takeoff
         SpawnGroundbreak();
     }
 
@@ -374,9 +374,9 @@ public class BoostJump : MonoBehaviour
 
     cameraBoostFx?.OnChargeProgress(0f);
 
-    _chargedFlashOn = false;
-        jetpackRare?.SetChargedFlash(false);
-    jetpackRare?.SetEnergyBallMeshesVisible(true);   // <- show orb while charging
+    // show energyball + DUST while charging
+    jetpackRare?.SetEnergyBallMeshesVisible(true);
+    jetpackRare?.SetChargeDustVisible(true);
 }
 
 // Cancel charging: turn OFF energy balls
@@ -384,7 +384,10 @@ private void CancelCharge()
 {
     _chargedFlashOn = false;
     jetpackRare?.SetChargedFlash(false);
-    jetpackRare?.SetEnergyBallMeshesVisible(false);  // <- hide orb when not charging
+
+    // hide orb + DUST when not charging
+    jetpackRare?.SetEnergyBallMeshesVisible(false);
+    jetpackRare?.SetChargeDustVisible(false);
 
     if (!_charging) return;
 
@@ -402,10 +405,6 @@ private void CancelCharge()
 
     SetBoostAnim(false);
     cameraBoostFx?.OnChargeCancel();
-
-    // ensure flash is off when canceling
-    _chargedFlashOn = false;
-    jetpackRare?.SetChargedFlash(false);
 
     StopSpeedlines();
 }

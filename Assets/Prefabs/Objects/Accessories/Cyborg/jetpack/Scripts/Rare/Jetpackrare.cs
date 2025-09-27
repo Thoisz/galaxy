@@ -59,6 +59,8 @@ public class JetpackRare : MonoBehaviour
     [Tooltip("If assigned, EnergyBall components are searched under this root; otherwise searched under the jetpack.")]
     [SerializeField] private Transform chargesRoot;
 
+    [SerializeField] private bool holesForced = false;
+
     // ── cached sets ──────────────────────────────────────────────────────────────
     private readonly List<Transform> _normalRoots = new();
     private readonly List<Transform> _superRoots  = new();
@@ -67,6 +69,9 @@ public class JetpackRare : MonoBehaviour
     private readonly List<ParticleSystem> _normalOuters = new();
     private readonly List<ParticleSystem> _superCores   = new();
     private readonly List<ParticleSystem> _superOuters  = new();
+    private readonly List<Animator> _manualFlashAnims = new();
+private readonly List<Animation> _manualFlashLegacies = new();
+private readonly List<SpriteRenderer> _manualFlashRenderers = new();
 
     // Thruster hole glow planes
     private readonly List<GameObject> _thrusterHoles = new();
@@ -89,6 +94,8 @@ public class JetpackRare : MonoBehaviour
     private EnergyBallFlash[] _flashes;
 
     private readonly List<MeshRenderer> _energyBallMeshRenderers = new();
+
+    private readonly List<ParticleSystem> _chargeDust = new();
 
     // ─────────────────────────────────────────────────────────────────────────────
 
@@ -259,6 +266,8 @@ public class JetpackRare : MonoBehaviour
             ApplyLifetimeList(_normalOuters, _curOuter, force:false);
         }
 
+if (holesForced) SetHolesActive(true); // override wins
+
         // ── Hole scale tween (only smooth when shrinking)
         TickHoleScale();
     }
@@ -302,6 +311,83 @@ public void SetEnergyBallMeshesVisible(bool on)
         var eb = _energyBalls[i];
         if (!eb) continue;
         eb.SetCharging(on);
+    }
+}
+
+void BuildChargeDustCache()
+{
+    _chargeDust.Clear();
+
+    Transform root = chargesRoot ? chargesRoot : transform;
+
+    foreach (var ps in root.GetComponentsInChildren<ParticleSystem>(true))
+    {
+        string n = ps.gameObject.name.ToLowerInvariant();
+        if (n.Contains("dust")) _chargeDust.Add(ps); // matches FX_dust_L / FX_dust_R / etc.
+    }
+}
+
+/// <summary>Show/Hide the charge dust FX. Safe to call anytime.</summary>
+public void SetChargeDustVisible(bool on)
+{
+    if (_chargeDust.Count == 0) BuildChargeDustCache();
+
+    for (int i = 0; i < _chargeDust.Count; i++)
+    {
+        var ps = _chargeDust[i];
+        if (!ps) continue;
+
+        var go = ps.gameObject;
+
+        if (on)
+        {
+            // 1) Make sure the GO is active BEFORE touching the particle system.
+            if (!go.activeSelf) go.SetActive(true);
+
+            // 2) Enable emission and restart clean.
+            var em = ps.emission; 
+            em.enabled = true;
+
+            ps.Clear(true);
+            ps.Play(true);
+        }
+        else
+        {
+            // 1) Stop and clear first (while still active).
+            ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+
+            // 2) Disable emission so it stays off when re-enabled later.
+            var em = ps.emission; 
+            em.enabled = false;
+
+            // 3) Optionally deactivate the GO.
+            if (go.activeSelf) go.SetActive(false);
+        }
+    }
+}
+
+/// <summary>
+/// Force the thruster-hole glow planes ON regardless of flying state.
+/// Pass false to release the override (normal flight rules resume).
+/// </summary>
+public void SetThrusterHolesForced(bool on)
+{
+    holesForced = on;
+
+    if (on)
+    {
+        // Ensure visible at normal size immediately
+        SetHolesActive(true);
+        SetHolesInstant(holeScaleNormal);
+    }
+    else
+    {
+        // If we’re not flying, hide; if flying, normal Update will keep them as needed
+        if (!playerFlight || !playerFlight.IsFlying)
+        {
+            SetHolesActive(false);
+            SetHolesInstant(holeScaleNormal);
+        }
     }
 }
 
@@ -501,27 +587,113 @@ public void SetEnergyBallMeshesVisible(bool on)
         return noWASD && Input.GetKey(KeyCode.Space);
     }
 
+    private void BuildManualFlashCache()
+{
+    _manualFlashAnims.Clear();
+    _manualFlashLegacies.Clear();
+    _manualFlashRenderers.Clear();
+
+    Transform root = chargesRoot ? chargesRoot : transform;
+
+    // Find any flash objects by name; keep it loose (contains "flash")
+    foreach (var sr in root.GetComponentsInChildren<SpriteRenderer>(true))
+    {
+        string n = sr.gameObject.name.ToLowerInvariant();
+        if (n.Contains("flash"))
+        {
+            _manualFlashRenderers.Add(sr);
+
+            var a = sr.GetComponent<Animator>();
+            if (a) _manualFlashAnims.Add(a);
+
+            var legacy = sr.GetComponent<Animation>();
+            if (legacy) _manualFlashLegacies.Add(legacy);
+        }
+    }
+}
+
     /// <summary>
-/// Turn the charged flash (EnergyBallFlash children) on/off.
-/// Called by BoostJump when charge hits 100% or is canceled/launched.
+/// Turn the charged flash on/off. Works with EnergyBallFlash *and* your manual
+/// SHEET_energyball_flash_* sprites that auto-animate in play mode.
 /// </summary>
 public void SetChargedFlash(bool on)
 {
-    // Ensure cache
+    // Existing EnergyBallFlash support (kept)
     if (_flashes == null || _flashes.Length == 0)
         _flashes = GetComponentsInChildren<EnergyBallFlash>(true);
-
-    // Drive all flashes
     for (int i = 0; i < _flashes.Length; i++)
     {
         var f = _flashes[i];
         if (!f) continue;
-
-        // Make sure the GO is enabled so the SpriteRenderer can show
-        if (on && !f.gameObject.activeSelf)
-            f.gameObject.SetActive(true);
-
+        if (on && !f.gameObject.activeSelf) f.gameObject.SetActive(true);
         f.SetCharged(on);
+    }
+
+    // NEW: manual flash sprites (Animators / Animation components)
+    if (_manualFlashAnims.Count == 0 &&
+        _manualFlashLegacies.Count == 0 &&
+        _manualFlashRenderers.Count == 0)
+    {
+        BuildManualFlashCache();
+    }
+
+    // Show/hide renderers
+    for (int i = 0; i < _manualFlashRenderers.Count; i++)
+    {
+        var sr = _manualFlashRenderers[i];
+        if (!sr) continue;
+        sr.enabled = on;
+        if (on && !sr.gameObject.activeSelf)
+            sr.gameObject.SetActive(true);
+    }
+
+    // Mecanim Animators
+    for (int i = 0; i < _manualFlashAnims.Count; i++)
+    {
+        var a = _manualFlashAnims[i];
+        if (!a) continue;
+
+        if (on)
+        {
+            // restart from the beginning and play
+            a.enabled = true;
+            // Play the default state (layer 0), rewind
+            var st = a.GetCurrentAnimatorStateInfo(0);
+            a.Play(st.shortNameHash, 0, 0f);
+            a.Update(0f);   // force apply first frame
+            a.speed = 1f;
+        }
+        else
+        {
+            // pause on first frame and optionally disable
+            a.speed = 0f;
+            a.Play(a.GetCurrentAnimatorStateInfo(0).shortNameHash, 0, 0f);
+            a.Update(0f);
+            a.enabled = false;
+        }
+    }
+
+    // Legacy Animation components
+    for (int i = 0; i < _manualFlashLegacies.Count; i++)
+    {
+        var anim = _manualFlashLegacies[i];
+        if (!anim) continue;
+
+        if (on)
+        {
+            // play default clip from start
+            foreach (AnimationState s in anim)
+                s.time = 0f;
+            anim.enabled = true;
+            anim.Play();
+        }
+        else
+        {
+            anim.Stop();
+            foreach (AnimationState s in anim)
+                s.time = 0f;   // rewind so next enable starts from frame 0
+            anim.enabled = false;
+        }
     }
 }
 
