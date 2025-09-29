@@ -205,6 +205,13 @@ public class JetpackCommon : MonoBehaviour
         TickHoleColor();
     }
 
+    private void LateUpdate()
+{
+    // Prevent accessories/visibility toggles from re-enabling the
+    // thruster-hole planes when we’re not actually flying.
+    EnsureThrusterHolesHiddenIfNotFlying();
+}
+
     // ───────────────── helpers ─────────────────
 
     static float MoveToward(float current, float target, float unitsPerSecond)
@@ -269,6 +276,16 @@ public class JetpackCommon : MonoBehaviour
             }
         }
     }
+
+private void EnsureThrusterHolesHiddenIfNotFlying()
+{
+    // If we’re flying, Update() owns visibility/scale/color.
+    if (playerFlight != null && playerFlight.IsFlying) return;
+
+    // Not flying → hard clamp OFF and reset to normal scale/color
+    SetHolesActive(false);
+    SetHolesInstant(holeScaleNormal, holeColorNormal);
+}
 
     static void EnableEmissionList(List<ParticleSystem> list, bool enable, bool clear)
     {

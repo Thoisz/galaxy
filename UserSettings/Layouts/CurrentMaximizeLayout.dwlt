@@ -24,7 +24,7 @@ MonoBehaviour:
   m_MinSize: {x: 400, y: 100}
   m_MaxSize: {x: 32384, y: 16192}
   vertical: 0
-  controlID: 71792
+  controlID: 116850
 --- !u!114 &2
 MonoBehaviour:
   m_ObjectHideFlags: 52
@@ -149,7 +149,7 @@ MonoBehaviour:
   m_MinSize: {x: 300, y: 100}
   m_MaxSize: {x: 24288, y: 16192}
   vertical: 1
-  controlID: 71745
+  controlID: 116796
 --- !u!114 &4
 MonoBehaviour:
   m_ObjectHideFlags: 52
@@ -175,7 +175,7 @@ MonoBehaviour:
   m_MinSize: {x: 300, y: 50}
   m_MaxSize: {x: 24288, y: 8096}
   vertical: 0
-  controlID: 71721
+  controlID: 116772
 --- !u!114 &5
 MonoBehaviour:
   m_ObjectHideFlags: 52
@@ -195,8 +195,8 @@ MonoBehaviour:
     y: 0
     width: 307
     height: 756
-  m_MinSize: {x: 200, y: 200}
-  m_MaxSize: {x: 4000, y: 4000}
+  m_MinSize: {x: 201, y: 221}
+  m_MaxSize: {x: 4001, y: 4021}
   m_ActualView: {fileID: 6}
   m_Panes:
   - {fileID: 6}
@@ -241,7 +241,7 @@ MonoBehaviour:
       scrollPos: {x: 0, y: 0}
       m_SelectedIDs: 
       m_LastClickedID: 0
-      m_ExpandedIDs: c6f1feffcaf1feff78f2feffb0f8ffffb4f8ffffd6f8ffff10fbffff1e7a0000307a0000867b0000c07c0000fc7e0000
+      m_ExpandedIDs: 7cceebff82ceebff78d1ebffa4d1ebffbcd1ebff54d2ebff6cd2ebff5cd3ebff74d3ebff54f4ebff0ecaecffcccaecffc6f1feffcaf1feff78f2feffb0f8ffffb4f8ffffd6f8ffff10fbffffce7800001c790000027a00001e7a0000307a0000367b0000a87b0000207c00006a7c0000927c0000c07c0000ca7c0000f87c0000fc7e0000
       m_RenameOverlay:
         m_UserAcceptedRename: 0
         m_Name: 
@@ -284,8 +284,8 @@ MonoBehaviour:
     y: 0
     width: 654
     height: 756
-  m_MinSize: {x: 200, y: 200}
-  m_MaxSize: {x: 4000, y: 4000}
+  m_MinSize: {x: 202, y: 221}
+  m_MaxSize: {x: 4002, y: 4021}
   m_ActualView: {fileID: 8}
   m_Panes:
   - {fileID: 8}
@@ -1298,9 +1298,9 @@ MonoBehaviour:
       e32: 0
       e33: 1
   m_PreviewAnimator: {fileID: 0}
-  m_AnimatorController: {fileID: 9100000, guid: 77984cbb975f021408c400d3db959d41, type: 2}
+  m_AnimatorController: {fileID: 9100000, guid: f94d8cbd258ed534594ffa08b988249d, type: 2}
   m_BreadCrumbs:
-  - m_Target: {fileID: 7501242517423757276, guid: 77984cbb975f021408c400d3db959d41, type: 2}
+  - m_Target: {fileID: -166779473075588170, guid: f94d8cbd258ed534594ffa08b988249d, type: 2}
     m_ScrollPosition: {x: 0, y: 0}
   stateMachineGraph: {fileID: 0}
   stateMachineGraphGUI: {fileID: 0}
@@ -1411,7 +1411,7 @@ MonoBehaviour:
     m_SkipHidden: 0
     m_SearchArea: 1
     m_Folders:
-    - Assets/Scripts/Player/Flight
+    - Assets/Textures/UI/Cyborg/equiptabpanel/itemcards/common
     m_Globs: []
     m_OriginalText: 
     m_ImportLogFlags: 0
@@ -1419,16 +1419,16 @@ MonoBehaviour:
   m_ViewMode: 1
   m_StartGridSize: 52
   m_LastFolders:
-  - Assets/Scripts/Player/Flight
+  - Assets/Textures/UI/Cyborg/equiptabpanel/itemcards/common
   m_LastFoldersGridSize: 52
   m_LastProjectPath: C:\Users\Thomas\OneDrive\Bureaublad\SysDVR\Space game\Galaxy
   m_LockTracker:
     m_IsLocked: 0
   m_FolderTreeState:
-    scrollPos: {x: 0, y: 858}
-    m_SelectedIDs: 2c770000
-    m_LastClickedID: 30508
-    m_ExpandedIDs: 0000000006730000ba740000be740000c0740000c4740000fc7400002a7500002c7500005075000054750000f6860000fc860000d2980100dc980100729c020000ca9a3b
+    scrollPos: {x: 0, y: 1034}
+    m_SelectedIDs: b2bf0500
+    m_LastClickedID: 376754
+    m_ExpandedIDs: 0000000006730000ba740000be740000c0740000d0740000fc7400002a7500002c7500005075000054750000f6860000fc860000d2980100dc9801009cd1010088bf05008cbf0500aebf050000ca9a3b
     m_RenameOverlay:
       m_UserAcceptedRename: 0
       m_Name: 
@@ -1484,7 +1484,7 @@ MonoBehaviour:
     m_SelectedInstanceIDs: 
     m_LastClickedInstanceID: 0
     m_HadKeyboardFocusLastEvent: 1
-    m_ExpandedInstanceIDs: c6230000e6530100a66b0000aa690000086e0000a2680000fc9300009c950000b267000052660000808b000096700000f49f00009470000092700000c87c00000acc000078cc0000b2d3000056e80000407c0000ca7e0000109e000068ae0000d6b20000b2b3000098700000e4db00005c8f00005a750000ce340000f470000052840000fa700000dc7000005c72000062700000587200005a700000727200003a7200006a7000000ebc000000000000fe7e0000f66f00007022f7ff0e710000567b0000
+    m_ExpandedInstanceIDs: c6230000e6530100a66b0000aa690000086e0000a2680000fc9300009c950000b267000052660000808b000096700000f49f00009470000092700000c87c00000acc000078cc0000b2d3000056e80000407c0000ca7e0000109e000068ae0000d6b20000b2b3000098700000e4db00005c8f00005a750000ce340000f470000052840000fa700000dc7000005c72000062700000587200005a700000727200003a7200006a7000000ebc000000000000fe7e0000f66f00007022f7ff0e710000567b0000c0770000
     m_RenameOverlay:
       m_UserAcceptedRename: 0
       m_Name: 

@@ -618,6 +618,15 @@ private IEnumerator DelayedAutoAlignBehindPlayerRoutine(float idleSeconds, float
     // ── Align phase (also aborts if panning resumes mid-blend)
     bool isInSpaceNow = gravityBody != null && gravityBody.IsInSpace;
 
+    // If flying and we have an LMB snapshot, restore that yaw+pitch instead of "behind player"
+    if (playerFlight != null && playerFlight.IsFlying && _hasLmbSnapshot)
+    {
+        float dur = Mathf.Max(0.01f, alignDuration);
+        yield return StartCoroutine(AutoAlignBackToPanStartRoutine(dur, null));
+        _autoAlignRoutine = null;
+        yield break;
+    }
+
     if (isInSpaceNow)
     {
         Vector3 up = currentGravityZoneUp;
@@ -1343,6 +1352,9 @@ private void EndLeftPanning()
     // After releasing LMB, always return smoothly to "behind the player"
     // (even when the player is idle and RMB was used to orbit without turning the player).
     // This uses your existing helpers and works in both gravity & space.
+if (playerFlight != null && playerFlight.IsFlying && _hasLmbSnapshot)
+    StartAutoAlignBackToPanStart(0.35f);
+else
     StartAutoAlignBehindPlayer(0.35f);
 
     // We explicitly ignore any LMB snapshot target now.

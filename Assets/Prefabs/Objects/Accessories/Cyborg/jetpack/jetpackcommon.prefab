@@ -15042,8 +15042,8 @@ MonoBehaviour:
   lifetimeLerpSpeed: 12
   speedUpMultiplier: 2
   idleAscendToFastMultiplier: 3
-  holeScaleNormal: 0.0011
-  holeScaleSuper: 0.0026
+  holeScaleNormal: 0.00039
+  holeScaleSuper: 0.001
   holeScaleShrinkDuration: 1
   holeColorNormal: {r: 0.87058824, g: 0.6358355, b: 0.031372532, a: 1}
   holeColorSuper: {r: 0.87058824, g: 0.42809227, b: 0.031372532, a: 1}
