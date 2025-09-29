@@ -9,6 +9,9 @@ public class PlayerCamera : MonoBehaviour
     [SerializeField] private Transform target; // The player character
     [SerializeField] private Transform cameraTransform; // The actual camera
 
+    [Header("Other References")]
+    [SerializeField] private EquipmentManager equipmentManager;
+
     [Header("Zoom Settings")]
     [SerializeField] private float minZoomDistance = 0.1f;
     [SerializeField] private float maxZoomDistance = 50f;
@@ -162,6 +165,10 @@ public class PlayerCamera : MonoBehaviour
         // Initialize pitch based on current camera angle
         _pitchDegrees = GetPitch();
         _basePitchDegrees = _pitchDegrees;
+
+        // Resolve EquipmentManager even if it’s not under the player
+    if (equipmentManager == null)
+        equipmentManager = FindObjectOfType<EquipmentManager>(true);
     }
 
     private void Update()
@@ -761,23 +768,77 @@ private IEnumerator DelayedAutoAlignBehindPlayerRoutine(float idleSeconds, float
 }
 
     private void RotateCharacterWithCamera()
+{
+    // In third-person we leave your current behavior alone (body turns elsewhere).
+    // In first-person we only rotate the *visuals* toward movement input so others see you turning.
+    if (!isInFirstPerson || !rotateCharacterInFirstPerson)
+        return;
+
+    // Respect dash & gravity-transition guards (same as your Update() gate)
+    bool inGravityTransition = gravityBody != null && gravityBody.IsTransitioningGravity;
+    bool isDashing = playerDash != null && playerDash.IsDashing();
+    if ((inGravityTransition && pauseRotationDuringGravityTransition) || isDashing)
+        return;
+
+    // Get movement intent from PlayerMovement (no hard dependency; just skip if missing)
+    var pm = PlayerMovement.instance;
+    if (pm == null || !pm.HasMovementInput())
+        return;
+
+    Vector3 worldMoveDir = pm.GetMoveDirection();
+    if (worldMoveDir.sqrMagnitude < 0.0001f)
+        return;
+
+    // Visual-only yaw toward input on the current gravity plane
+    Vector3 up = currentGravityZoneUp;
+    YawVisualToward(worldMoveDir, up, characterRotationSpeed);
+}
+
+/// <summary>
+/// Yaws the visual model toward a world-space forward direction on the provided up plane,
+/// without affecting the Rigidbody or camera yaw.
+/// </summary>
+private void YawVisualToward(Vector3 worldForward, Vector3 up, float turnSpeed)
+{
+    Transform visualRoot = ResolveVisualRoot();
+    if (visualRoot == null) return;
+
+    // Constrain to yaw by projecting onto the gravity (or zone) plane
+    Vector3 targetFwd = Vector3.ProjectOnPlane(worldForward, up).normalized;
+    if (targetFwd.sqrMagnitude < 0.0001f) return;
+
+    Vector3 currentFwd = Vector3.ProjectOnPlane(visualRoot.forward, up).normalized;
+    if (currentFwd.sqrMagnitude < 0.0001f)
+        currentFwd = Vector3.ProjectOnPlane(target.forward, up).normalized;
+
+    Quaternion targetYaw = Quaternion.LookRotation(targetFwd, up);
+    visualRoot.rotation = Quaternion.Slerp(visualRoot.rotation, targetYaw, Time.deltaTime * Mathf.Max(1f, turnSpeed));
+}
+
+/// <summary>
+/// Finds a stable "visual root" to rotate (Animator if present; otherwise first character renderer),
+/// avoiding the Rigidbody/physics root so gameplay isn't affected.
+/// </summary>
+private Transform ResolveVisualRoot()
+{
+    // Prefer the Animator transform (usually the mesh root under the physics root)
+    var anim = target != null ? target.GetComponentInChildren<Animator>() : null;
+    if (anim != null && anim.transform != null)
+        return anim.transform;
+
+    // Fallback to first provided character renderer
+    if (characterRenderers != null)
     {
-        if (cameraForwardHorizontal.sqrMagnitude < 0.001f) return;
-
-        // Only rotate with camera in first person mode
-        if (isInFirstPerson && rotateCharacterInFirstPerson)
+        for (int i = 0; i < characterRenderers.Length; i++)
         {
-            // Create rotation that points character in camera's forward direction while maintaining player's up vector
-            Quaternion targetRotation = Quaternion.LookRotation(cameraForwardHorizontal, playerTransform.up);
-
-            // Apply the rotation with a slight smoothing
-            playerTransform.rotation = Quaternion.Slerp(
-                playerTransform.rotation,
-                targetRotation,
-                Time.deltaTime * characterRotationSpeed
-            );
+            if (characterRenderers[i] != null && characterRenderers[i].transform != null)
+                return characterRenderers[i].transform;
         }
     }
+
+    // Last resort: do nothing rather than rotating the physics root
+    return null;
+}
 
     // PlayerCamera.cs — replace HandleCameraCollision with this filtered version
 private Vector3 HandleCameraCollision(Vector3 pivotPos, Vector3 desiredPos)
@@ -918,29 +979,35 @@ public bool IsAtPitchLimitDown(float epsilonDeg = 0.05f)
 }
 
     private void HandleCharacterLayer()
+{
+    bool shouldBeInFirstPerson = currentZoomDistance <= (minZoomDistance + 0.1f);
+
+    if (shouldBeInFirstPerson != isInFirstPerson)
     {
-        bool shouldBeInFirstPerson = currentZoomDistance <= (minZoomDistance + 0.1f);
+        isInFirstPerson = shouldBeInFirstPerson;
 
-        if (shouldBeInFirstPerson != isInFirstPerson)
+        if (isInFirstPerson)
         {
-            isInFirstPerson = shouldBeInFirstPerson;
-
-            if (isInFirstPerson)
-            {
-                // Hide character in first person
-                SetCharacterLayer(invisibleLayer);
-                playerCamera.cullingMask &= ~(1 << invisibleLayer);
-                LockCursor(true);
-            }
-            else
-            {
-                // Show character in third person
-                SetCharacterLayer(localPlayerLayer);
-                playerCamera.cullingMask |= (1 << invisibleLayer);
-                LockCursor(false);
-            }
+            // Hide character body (existing behavior)
+            SetCharacterLayer(invisibleLayer);
+            playerCamera.cullingMask &= ~(1 << invisibleLayer);
+            LockCursor(true);
         }
+        else
+        {
+            // Show character body (existing behavior)
+            SetCharacterLayer(localPlayerLayer);
+            playerCamera.cullingMask |= (1 << invisibleLayer);
+            LockCursor(false);
+        }
+
+if (equipmentManager != null)
+{
+    // Accessories are hidden in FP, visible in TP
+    equipmentManager.SetAccessoriesVisible(!isInFirstPerson);
+}
     }
+}
 
     private void SetCharacterLayer(int layer)
     {

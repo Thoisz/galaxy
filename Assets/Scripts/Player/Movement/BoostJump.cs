@@ -97,96 +97,99 @@ public class BoostJump : MonoBehaviour
     private bool _flightLockActive = false;
     private bool _flightWasEnabled = false;
 
+    // Tracks whether the current boost wants speedlines (even if they're hidden in FP)
+private bool _speedlinesRequested = false;
+
     // ── lifecycle ──
     private void Awake()
-{
-    if (!playerFlight)   playerFlight   = GetComponentInParent<PlayerFlight>();
-    if (!playerBody)     playerBody     = GetComponentInParent<Rigidbody>();
-    if (!playerCrouch)   playerCrouch   = GetComponentInParent<PlayerCrouch>();
-    if (!playerMovement) playerMovement = GetComponentInParent<PlayerMovement>();
-    if (!playerJump)     playerJump     = GetComponentInParent<PlayerJump>();
-
-    if (!playerCam)
     {
-        var rig = GetComponentInParent<PlayerCamera>(true);
-        if (rig)
+        if (!playerFlight)   playerFlight   = GetComponentInParent<PlayerFlight>();
+        if (!playerBody)     playerBody     = GetComponentInParent<Rigidbody>();
+        if (!playerCrouch)   playerCrouch   = GetComponentInParent<PlayerCrouch>();
+        if (!playerMovement) playerMovement = GetComponentInParent<PlayerMovement>();
+        if (!playerJump)     playerJump     = GetComponentInParent<PlayerJump>();
+
+        if (!playerCam)
         {
-            var camInRig = rig.GetComponentInChildren<Camera>(true);
-            if (camInRig) playerCam = camInRig;
+            var rig = GetComponentInParent<PlayerCamera>(true);
+            if (rig)
+            {
+                var camInRig = rig.GetComponentInChildren<Camera>(true);
+                if (camInRig) playerCam = camInRig;
+            }
+            if (!playerCam && Camera.main) playerCam = Camera.main;
         }
-        if (!playerCam && Camera.main) playerCam = Camera.main;
+
+        if (!gravityBody) gravityBody = GetComponentInParent<GravityBody>();
+        if (gravityBody)
+        {
+            _miGetGravityDir = gravityBody.GetType().GetMethod(
+                "GetEffectiveGravityDirection",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
+            );
+        }
+
+        if (playerFlight)
+        {
+            _miEnterFlight = playerFlight.GetType().GetMethod(
+                "EnterFlight",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            );
+        }
+
+        // NEW: find the jetpack FX driver that owns the EnergyBallFlash children
+        if (!jetpackRare) jetpackRare = GetComponentInParent<JetpackRare>(true);
+        jetpackRare?.SetChargedFlash(false); // ensure off at boot
+
+        TryBindCameraBoostFx();
+
+        EnsureSpeedlinesBound();
+        EnsureCameraTransform();
+
+        EnsureAnimator();
+        SetBoostAnim(false);
+
+        EnsureGroundbreakPrefabBound();
     }
-
-    if (!gravityBody) gravityBody = GetComponentInParent<GravityBody>();
-    if (gravityBody)
-    {
-        _miGetGravityDir = gravityBody.GetType().GetMethod(
-            "GetEffectiveGravityDirection",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic
-        );
-    }
-
-    if (playerFlight)
-    {
-        _miEnterFlight = playerFlight.GetType().GetMethod(
-            "EnterFlight",
-            BindingFlags.Instance | BindingFlags.NonPublic
-        );
-    }
-
-    // NEW: find the jetpack FX driver that owns the EnergyBallFlash children
-    if (!jetpackRare) jetpackRare = GetComponentInParent<JetpackRare>(true);
-    jetpackRare?.SetChargedFlash(false); // ensure off at boot
-
-    TryBindCameraBoostFx();
-
-    EnsureSpeedlinesBound();
-    EnsureCameraTransform();
-
-    EnsureAnimator();
-    SetBoostAnim(false);
-
-    EnsureGroundbreakPrefabBound();
-}
 
     private void OnEnable()
-{
-    if (!cameraBoostFx) TryBindCameraBoostFx();
-    EnsureSpeedlinesBound();
-    EnsureCameraTransform();
-    EnsureGroundbreakPrefabBound();
+    {
+        if (!cameraBoostFx) TryBindCameraBoostFx();
+        EnsureSpeedlinesBound();
+        EnsureCameraTransform();
+        EnsureGroundbreakPrefabBound();
 
-    if (!jetpackRare) jetpackRare = GetComponentInParent<JetpackRare>();
-}
+        if (!jetpackRare) jetpackRare = GetComponentInParent<JetpackRare>();
+    }
 
     private void OnDisable()
-{
-    _chargedFlashOn = false;
-    jetpackRare?.SetChargedFlash(false);
-    jetpackRare?.SetEnergyBallMeshesVisible(false);
-
-    _charging  = false;
-    _holdTimer = 0f;
-    _hadMoveDuringCharge = false;
-
-    if (playerMovement)
     {
-        playerMovement.CancelExternalHorizontalHold();
-        playerMovement.SetExternalStopMovement(false);
+        _chargedFlashOn = false;
+        jetpackRare?.SetChargedFlash(false);
+        jetpackRare?.SetEnergyBallMeshesVisible(false);
+
+        _charging  = false;
+        _holdTimer = 0f;
+        _hadMoveDuringCharge = false;
+
+        if (playerMovement)
+        {
+            playerMovement.CancelExternalHorizontalHold();
+            playerMovement.SetExternalStopMovement(false);
+        }
+        if (playerJump) playerJump.SetJumpSuppressed(false);
+
+        LockFlightEntry(false);
+
+        SetBoostAnim(false);
+        cameraBoostFx?.OnChargeCancel();
+
+        // hard stop the flash if object disables
+        _chargedFlashOn = false;
+        jetpackRare?.SetChargedFlash(false);
+
+        StopSpeedlines();
     }
-    if (playerJump) playerJump.SetJumpSuppressed(false);
-
-    LockFlightEntry(false);
-
-    SetBoostAnim(false);
-    cameraBoostFx?.OnChargeCancel();
-
-    // hard stop the flash if object disables
-    _chargedFlashOn = false;
-    jetpackRare?.SetChargedFlash(false);
-
-    StopSpeedlines();
-}
 
     private void Update()
     {
@@ -233,38 +236,38 @@ public class BoostJump : MonoBehaviour
     }
 
     private void FixedUpdate()
-{
-    if (!_charging) return;
-
-    _holdTimer += Time.fixedDeltaTime;
-
-    if (playerBody)
     {
-        Vector3 up   = GetUp();
-        Vector3 v    = playerBody.velocity;
-        Vector3 vert = Vector3.Project(v, up);
-        playerBody.velocity = vert;
+        if (!_charging) return;
+
+        _holdTimer += Time.fixedDeltaTime;
+
+        if (playerBody)
+        {
+            Vector3 up   = GetUp();
+            Vector3 v    = playerBody.velocity;
+            Vector3 vert = Vector3.Project(v, up);
+            playerBody.velocity = vert;
+        }
+
+        // normalized charge 0..1
+        float t = chargeTimeSeconds <= 0f ? 1f : Mathf.Clamp01(_holdTimer / chargeTimeSeconds);
+
+        // update camera FX
+        if (cameraBoostFx) cameraBoostFx.OnChargeProgress(t);
+
+        // fully charged?
+        bool nowFull = (t >= 1f - 1e-4f);
+        if (nowFull != _chargedFlashOn)
+        {
+            _chargedFlashOn = nowFull;
+
+            // your old flash toggle (keep if you still use it)
+            jetpackRare?.SetChargedFlash(_chargedFlashOn);
+
+            // NEW: dust is ON while charging, OFF when full
+            jetpackRare?.SetChargeDustVisible(!_chargedFlashOn);
+        }
     }
-
-    // normalized charge 0..1
-    float t = chargeTimeSeconds <= 0f ? 1f : Mathf.Clamp01(_holdTimer / chargeTimeSeconds);
-
-    // update camera FX
-    if (cameraBoostFx) cameraBoostFx.OnChargeProgress(t);
-
-    // fully charged?
-    bool nowFull = (t >= 1f - 1e-4f);
-    if (nowFull != _chargedFlashOn)
-    {
-        _chargedFlashOn = nowFull;
-
-        // your old flash toggle (keep if you still use it)
-        jetpackRare?.SetChargedFlash(_chargedFlashOn);
-
-        // NEW: dust is ON while charging, OFF when full
-        jetpackRare?.SetChargeDustVisible(!_chargedFlashOn);
-    }
-}
 
     private void LateUpdate()
     {
@@ -332,54 +335,58 @@ public class BoostJump : MonoBehaviour
         }
 
         cameraBoostFx?.OnLaunch(up);
-        SpawnGroundbreak();
+        SpawnGroundbreak(); // keep takeoff FX; remove if you don't want it
     }
 
     if (playerMovement) playerMovement.SetExternalStopMovement(false);
     if (playerMovement) playerMovement.NotifyJumped();
 
     SetBoostAnim(_wasBoostJumpThisLaunch);
+
+    // Request speedlines for the duration of this boost (even if hidden in FP)
+    _speedlinesRequested = true;
     PlaySpeedlines();
+
     StartCoroutine(BoostApexAndAfter());
 }
 
     // ── actions ──
 
     private void StartCharge(bool crouchHeldNow, bool spaceHeldNow)
-{
-    _charging  = true;
-    _holdTimer = 0f;
-    _hadMoveDuringCharge = false;
-
-    _prevCrouchHeld = crouchHeldNow;
-    _prevSpaceHeld  = spaceHeldNow;
-
-    if (playerBody)
     {
-        Vector3 up   = GetUp();
-        Vector3 vert = Vector3.Project(playerBody.velocity, up);
-        playerBody.velocity = vert;
+        _charging  = true;
+        _holdTimer = 0f;
+        _hadMoveDuringCharge = false;
+
+        _prevCrouchHeld = crouchHeldNow;
+        _prevSpaceHeld  = spaceHeldNow;
+
+        if (playerBody)
+        {
+            Vector3 up   = GetUp();
+            Vector3 vert = Vector3.Project(playerBody.velocity, up);
+            playerBody.velocity = vert;
+        }
+
+        if (playerMovement) playerMovement.SetExternalStopMovement(true);
+        SuppressJump(true);
+        var dash = GetComponentInParent<PlayerDash>();
+        dash?.SetDashSuppressed(true);
+
+        LockFlightEntry(true);
+
+        // reset flash state on new charge
+        _chargedFlashOn = false;
+        jetpackRare?.SetChargedFlash(false);
+
+        cameraBoostFx?.OnChargeProgress(0f);
+
+        // show energyball + DUST while charging
+        jetpackRare?.SetEnergyBallMeshesVisible(true);
+        jetpackRare?.SetChargeDustVisible(true);
     }
 
-    if (playerMovement) playerMovement.SetExternalStopMovement(true);
-    SuppressJump(true);
-    var dash = GetComponentInParent<PlayerDash>();
-    dash?.SetDashSuppressed(true);
-
-    LockFlightEntry(true);
-
-    // reset flash state on new charge
-    _chargedFlashOn = false;
-    jetpackRare?.SetChargedFlash(false);
-
-    cameraBoostFx?.OnChargeProgress(0f);
-
-    // show energyball + DUST while charging
-    jetpackRare?.SetEnergyBallMeshesVisible(true);
-    jetpackRare?.SetChargeDustVisible(true);
-}
-
-// Cancel charging: turn OFF energy balls
+    // Cancel charging: turn OFF energy balls
 private void CancelCharge()
 {
     _chargedFlashOn = false;
@@ -406,63 +413,71 @@ private void CancelCharge()
     SetBoostAnim(false);
     cameraBoostFx?.OnChargeCancel();
 
+    // clear and stop speedlines
+    _speedlinesRequested = false;
     StopSpeedlines();
 }
 
     private System.Collections.IEnumerator BoostApexAndAfter()
+{
+    const float timeout = 4f;
+    float t = 0f;
+    bool wentUp = false;
+
+    while (t < timeout)
     {
-        const float timeout = 4f;
-        float t = 0f;
-        bool wentUp = false;
+        yield return null;
+        t += Time.deltaTime;
 
-        while (t < timeout)
-        {
-            yield return null;
-            t += Time.deltaTime;
+        if (!playerBody) break;
 
-            if (!playerBody) break;
+        Vector3 up = GetUp();
+        float vUp = Vector3.Dot(playerBody.velocity, up);
+        if (vUp > 0.5f) wentUp = true;
+        if (wentUp && vUp <= 0.05f) break;
+    }
 
-            Vector3 up = GetUp();
-            float vUp = Vector3.Dot(playerBody.velocity, up);
-            if (vUp > 0.5f) wentUp = true;
-            if (wentUp && vUp <= 0.05f) break;
-        }
+    cameraBoostFx?.OnApex(GetUp());
 
-        cameraBoostFx?.OnApex(GetUp());
+    if (!lockFlight && playerFlight != null)
+    {
+        if (playerMovement) playerMovement.CancelExternalHorizontalHold();
 
-        if (!lockFlight && playerFlight != null)
-        {
-            if (playerMovement) playerMovement.CancelExternalHorizontalHold();
+        LockFlightEntry(false);
+        TryEnterFlight();
 
-            LockFlightEntry(false);
-            TryEnterFlight();
+        SetBoostAnim(false);
+        cameraBoostFx?.OnLand(); // if you only want this on true land, move it to the grounded path
 
-            SetBoostAnim(false);
-            cameraBoostFx?.OnLand();
-            StopSpeedlines();
-        }
-        else
-        {
-            if (_fallBoostRoutine != null) StopCoroutine(_fallBoostRoutine);
-            _fallBoostRoutine = NoFlightFallBoostUntilGrounded();
-            yield return StartCoroutine(_fallBoostRoutine);
+        // boost finished → clear request and stop the effect
+        _speedlinesRequested = false;
+        StopSpeedlines();
+    }
+    else
+    {
+        if (_fallBoostRoutine != null) StopCoroutine(_fallBoostRoutine);
+        _fallBoostRoutine = NoFlightFallBoostUntilGrounded();
+        yield return StartCoroutine(_fallBoostRoutine);
 
-            if (playerMovement) playerMovement.CancelExternalHorizontalHold();
-            SetBoostAnim(false);
+        if (playerMovement) playerMovement.CancelExternalHorizontalHold();
+        SetBoostAnim(false);
 
-            cameraBoostFx?.OnLand();
-            StopSpeedlines();
+        cameraBoostFx?.OnLand();
 
-            LockFlightEntry(false);
-        }
+        // boost finished → clear request and stop the effect
+        _speedlinesRequested = false;
+        StopSpeedlines();
 
-        SuppressJump(false);
-        var dash = GetComponentInParent<PlayerDash>();
-        dash?.SetDashSuppressed(false);
+        LockFlightEntry(false);
 
-        // 🔸 spawn groundbreak on landing
+        // Spawn groundbreak only after we actually touched ground.
         SpawnGroundbreak();
     }
+
+    SuppressJump(false);
+    var dash = GetComponentInParent<PlayerDash>();
+    dash?.SetDashSuppressed(false);
+}
 
     private System.Collections.IEnumerator NoFlightFallBoostUntilGrounded()
     {
@@ -515,32 +530,38 @@ private void CancelCharge()
     }
 
     void SpawnGroundbreak()
-{
-    if (fxGroundbreakPrefab == null || playerBody == null) return;
-
-    Vector3 up  = GetUp();
-    Vector3 pos = playerBody.position; // let the root do the precise snap with a ray
-    Quaternion rot = Quaternion.identity;
-
-    var fx = Instantiate(fxGroundbreakPrefab, pos, rot);
-
-    // Hand off to the prefab so it can raycast down, align to ground normal,
-    // and inherit the ground material (all inside GroundbreakFXRoot).
-    var root = fx.GetComponent<GroundbreakFXRoot>();
-    if (root != null)
     {
-        // Optional: expose a bool on the root to turn on logs in the Inspector
-        root.ConfigureFromContact(playerBody.position, up);
+        if (fxGroundbreakPrefab == null || playerBody == null) return;
+
+        Vector3 up  = GetUp();
+
+        // Safety: only spawn if there is ground reasonably close below us.
+        const float maxRayDist = 20f;
+        if (!Physics.Raycast(playerBody.position + up * 0.1f, -up, out var hit, maxRayDist, ~0, QueryTriggerInteraction.Ignore))
+            return; // no ground under us → don't spawn
+
+        Vector3 pos = hit.point;
+        Quaternion rot = Quaternion.LookRotation(
+            Vector3.ProjectOnPlane(transform.forward, hit.normal).normalized + 0.0001f * Vector3.forward,
+            hit.normal
+        );
+
+        var fx = Instantiate(fxGroundbreakPrefab, pos, rot);
+
+        // Hand off to the prefab so it can raycast down, align to ground normal,
+        // and inherit the ground material (all inside GroundbreakFXRoot).
+        var root = fx.GetComponent<GroundbreakFXRoot>();
+        if (root != null)
+        {
+            root.ConfigureFromContact(playerBody.position, up);
+        }
+        else
+        {
+            // Fallback: we already snapped to ground via our raycast.
+            fx.transform.position = pos;
+            fx.transform.rotation = rot;
+        }
     }
-    else
-    {
-        // Fallback: if the prefab somehow lacks GroundbreakFXRoot, do a minimal place
-        // so you still see *something* (but no material inheritance/alignment).
-        fx.transform.position = playerBody.position - up * 0.05f;
-        fx.transform.rotation = Quaternion.LookRotation(
-            Vector3.ProjectOnPlane(transform.forward, up).normalized + 0.0001f * Vector3.forward, up);
-    }
-}
 
     Material GetGroundMaterialUnderPlayer(Vector3 origin, Vector3 up, float rayLen = 3f)
     {
@@ -683,34 +704,63 @@ private void CancelCharge()
     }
 
     private void AlignSpeedlinesTowardCamera()
+{
+    if (_speedlinesXform == null || _camXform == null) return;
+
+    // In first person: keep them off, but DO NOT clear the request flag.
+    if (IsFirstPersonView())
     {
-        if (_speedlinesXform == null || _camXform == null) return;
-
-        Vector3 toCam = _camXform.position - _speedlinesXform.position;
-        if (toCam.sqrMagnitude < 1e-6f) return;
-
-        Vector3 upRef = speedlinesMatchCameraRoll ? _camXform.up : Vector3.up;
-
-        Quaternion look = Quaternion.LookRotation(toCam.normalized, upRef);
-        look *= Quaternion.Euler(speedlinesLookOffsetEuler);
-
-        _speedlinesXform.rotation = look;
+        if (speedlines != null && speedlines.isPlaying)
+            speedlines.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+        return;
     }
+
+    // Back in third person: if a boost is ongoing and the effect is stopped, resume it.
+    if (_speedlinesRequested && speedlines != null && !speedlines.isPlaying)
+        speedlines.Play(true);
+
+    // Normal look-at alignment
+    Vector3 toCam = _camXform.position - _speedlinesXform.position;
+    if (toCam.sqrMagnitude < 1e-6f) return;
+
+    Vector3 upRef = speedlinesMatchCameraRoll ? _camXform.up : Vector3.up;
+
+    Quaternion look = Quaternion.LookRotation(toCam.normalized, upRef);
+    look *= Quaternion.Euler(speedlinesLookOffsetEuler);
+
+    _speedlinesXform.rotation = look;
+}
 
     private void PlaySpeedlines()
-    {
-        EnsureSpeedlinesBound();
-        EnsureCameraTransform();
-        if (speedlines == null) return;
+{
+    EnsureSpeedlinesBound();
+    EnsureCameraTransform();
+    if (speedlines == null) return;
 
-        if (!speedlines.isPlaying) speedlines.Play(true);
+    // In first person we *want* them hidden but keep the request true
+    if (IsFirstPersonView())
+    {
+        if (speedlines.isPlaying)
+            speedlines.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+        return;
     }
+
+    if (!speedlines.isPlaying) speedlines.Play(true);
+}
 
     private void StopSpeedlines()
-    {
-        if (speedlines == null) return;
-        speedlines.Stop(true, ParticleSystemStopBehavior.StopEmitting);
-    }
+{
+    if (speedlines == null) return;
+    speedlines.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+}
+
+// Helper: are we currently in first-person view?
+private bool IsFirstPersonView()
+{
+    var rig = GetComponentInParent<PlayerCamera>(true);
+    if (!rig) rig = FindObjectOfType<PlayerCamera>(true);
+    return rig != null && rig.IsInFirstPerson;
+}
 
     private void SuppressJump(bool on)
     {

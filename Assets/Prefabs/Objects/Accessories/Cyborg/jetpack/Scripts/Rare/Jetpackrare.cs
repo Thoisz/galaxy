@@ -97,6 +97,10 @@ private readonly List<SpriteRenderer> _manualFlashRenderers = new();
 
     private readonly List<ParticleSystem> _chargeDust = new();
 
+    // True only while BoostJump (or anything) is actively requesting charge visuals.
+// When false, JetpackRare will force-hide all charge VFX every frame.
+private bool _chargeVisualsRequested = false;
+
     // ─────────────────────────────────────────────────────────────────────────────
 
     void Awake()
@@ -296,7 +300,14 @@ if (holesForced) SetHolesActive(true); // override wins
 /// </summary>
 public void SetEnergyBallMeshesVisible(bool on)
 {
-    if (_energyBallMeshRenderers.Count == 0) BuildEnergyBallCache();
+    // This is the authoritative flag we’ll enforce even if other systems
+    // re-enable the renderers (e.g., EquipmentManager on TP return).
+    _chargeVisualsRequested = on;
+
+    if (_energyBallMeshRenderers.Count == 0 || _energyBalls.Count == 0)
+        BuildEnergyBallCache();
+
+    // Mesh renderers
     for (int i = 0; i < _energyBallMeshRenderers.Count; i++)
     {
         var mr = _energyBallMeshRenderers[i];
@@ -304,13 +315,20 @@ public void SetEnergyBallMeshesVisible(bool on)
         mr.enabled = on;
     }
 
-    // If you kept the old EnergyBall script on some objects, still forward the call:
-    if (_energyBalls.Count == 0) BuildEnergyBallCache();
+    // EnergyBall components (if present)
     for (int i = 0; i < _energyBalls.Count; i++)
     {
         var eb = _energyBalls[i];
         if (!eb) continue;
         eb.SetCharging(on);
+    }
+
+    // Be defensive: when turning OFF charge, also hard-stop any dust/flash
+    // so they can’t linger if accessories get re-enabled later.
+    if (!on)
+    {
+        SetChargeDustVisible(false);
+        SetChargedFlash(false);
     }
 }
 
@@ -618,6 +636,9 @@ public void SetThrusterHolesForced(bool on)
 /// </summary>
 public void SetChargedFlash(bool on)
 {
+    // Flash ON also implies we’re in a charge state.
+    if (on) _chargeVisualsRequested = true;
+
     // Existing EnergyBallFlash support (kept)
     if (_flashes == null || _flashes.Length == 0)
         _flashes = GetComponentsInChildren<EnergyBallFlash>(true);
@@ -629,7 +650,7 @@ public void SetChargedFlash(bool on)
         f.SetCharged(on);
     }
 
-    // NEW: manual flash sprites (Animators / Animation components)
+    // Manual flash sprites / animators / legacy animation
     if (_manualFlashAnims.Count == 0 &&
         _manualFlashLegacies.Count == 0 &&
         _manualFlashRenderers.Count == 0)
@@ -637,7 +658,7 @@ public void SetChargedFlash(bool on)
         BuildManualFlashCache();
     }
 
-    // Show/hide renderers
+    // Renderers
     for (int i = 0; i < _manualFlashRenderers.Count; i++)
     {
         var sr = _manualFlashRenderers[i];
@@ -647,7 +668,7 @@ public void SetChargedFlash(bool on)
             sr.gameObject.SetActive(true);
     }
 
-    // Mecanim Animators
+    // Mecanim animators
     for (int i = 0; i < _manualFlashAnims.Count; i++)
     {
         var a = _manualFlashAnims[i];
@@ -655,17 +676,14 @@ public void SetChargedFlash(bool on)
 
         if (on)
         {
-            // restart from the beginning and play
             a.enabled = true;
-            // Play the default state (layer 0), rewind
             var st = a.GetCurrentAnimatorStateInfo(0);
             a.Play(st.shortNameHash, 0, 0f);
-            a.Update(0f);   // force apply first frame
+            a.Update(0f);
             a.speed = 1f;
         }
         else
         {
-            // pause on first frame and optionally disable
             a.speed = 0f;
             a.Play(a.GetCurrentAnimatorStateInfo(0).shortNameHash, 0, 0f);
             a.Update(0f);
@@ -673,7 +691,7 @@ public void SetChargedFlash(bool on)
         }
     }
 
-    // Legacy Animation components
+    // Legacy Animation
     for (int i = 0; i < _manualFlashLegacies.Count; i++)
     {
         var anim = _manualFlashLegacies[i];
@@ -681,20 +699,70 @@ public void SetChargedFlash(bool on)
 
         if (on)
         {
-            // play default clip from start
-            foreach (AnimationState s in anim)
-                s.time = 0f;
+            foreach (AnimationState s in anim) s.time = 0f;
             anim.enabled = true;
             anim.Play();
         }
         else
         {
             anim.Stop();
-            foreach (AnimationState s in anim)
-                s.time = 0f;   // rewind so next enable starts from frame 0
+            foreach (AnimationState s in anim) s.time = 0f;
             anim.enabled = false;
         }
     }
+}
+
+private void LateUpdate()
+{
+    // 1) If NO system is requesting charge visuals, enforce OFF every frame.
+    //    (Prevents FP↔TP toggles from resurrecting orb/dust/flash.)
+    if (!_chargeVisualsRequested)
+        EnsureChargeVisualsOff();
+
+    // 2) Thruster holes should only be visible when:
+    //      • playerFlight.IsFlying, OR
+    //      • holesForced == true (temporary override from EnergyBall intro gate)
+    //    Otherwise, enforce them OFF every frame so accessory toggles can’t re-enable.
+    EnsureThrusterHolesHiddenIfNotFlying();
+}
+
+private void EnsureChargeVisualsOff()
+{
+    // Mesh renderers
+    if (_energyBallMeshRenderers.Count == 0 || _energyBalls.Count == 0)
+        BuildEnergyBallCache();
+
+    for (int i = 0; i < _energyBallMeshRenderers.Count; i++)
+    {
+        var mr = _energyBallMeshRenderers[i];
+        if (!mr) continue;
+        if (mr.enabled) mr.enabled = false;
+    }
+
+    // EnergyBall components (stop animation + hide)
+    for (int i = 0; i < _energyBalls.Count; i++)
+    {
+        var eb = _energyBalls[i];
+        if (!eb) continue;
+        eb.SetCharging(false);
+    }
+
+    // Dust & flashes OFF
+    SetChargeDustVisible(false);
+    // Don’t call SetChargedFlash(false) indirectly (it sets flags),
+    // just hard-force off via the existing method:
+    SetChargedFlash(false);
+}
+
+private void EnsureThrusterHolesHiddenIfNotFlying()
+{
+    // If we’re force-showing, or actually flying, let Update() own the state.
+    if (holesForced) return;
+    if (playerFlight != null && playerFlight.IsFlying) return;
+
+    // Not flying and no override → hard-clamp holes OFF and reset scale.
+    SetHolesActive(false);
+    SetHolesInstant(holeScaleNormal);
 }
 
 #if UNITY_EDITOR

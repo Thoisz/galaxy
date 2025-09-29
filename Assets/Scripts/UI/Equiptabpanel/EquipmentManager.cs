@@ -468,6 +468,33 @@ void EquipAccessory(EquipableItem item)
     Debug.Log($"Equipped accessory '{item.itemName}'.");
 }
 
+private static void SetRenderersEnabled(GameObject go, bool enabled)
+{
+    if (!go) return;
+    var rends = go.GetComponentsInChildren<Renderer>(true);
+    for (int i = 0; i < rends.Length; i++)
+    {
+        // Optional: skip shadow-only adjustments if you have special renderers.
+        rends[i].enabled = enabled;
+    }
+}
+
+public void SetAccessoriesVisible(bool visible)
+{
+    // Hide/show only items in the Accessory category
+    foreach (var kvp in _spawnedAttachmentInstances)
+    {
+        var item = kvp.Key;
+        if (item == null || item.category != EquipmentCategory.Accessory) continue;
+
+        var list = kvp.Value;
+        if (list == null) continue;
+
+        for (int i = 0; i < list.Count; i++)
+            SetRenderersEnabled(list[i], visible);
+    }
+}
+
 void UnequipAccessory(EquipableItem item)
 {
     if (item == null) return;
@@ -520,6 +547,16 @@ void AttachItemPrefabs(EquipableItem item)
         if (oldRuntime) Destroy(oldRuntime);
 
         spawned.Add(inst);
+    }
+
+    // NEW: if we’re currently in first-person, immediately hide newly spawned accessories
+    // so they don’t pop into view until you zoom back out.
+    var rig = FindObjectOfType<PlayerCamera>();
+    if (rig != null && rig.IsInFirstPerson && item.category == EquipmentCategory.Accessory)
+    {
+        var list = _spawnedAttachmentInstances[item];
+        for (int i = 0; i < list.Count; i++)
+            SetRenderersEnabled(list[i], false);
     }
 }
 

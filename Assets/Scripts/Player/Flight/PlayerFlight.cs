@@ -10,6 +10,7 @@ public class PlayerFlight : MonoBehaviour
     [Header("Movement")]
     [SerializeField] private float _slowSpeed = 5f;                 // cruise speed
     [SerializeField] private float _fastSpeed = 20f;                // top speed
+    [SerializeField] private float _fastSpeedFovIncrease = 8f;
     [SerializeField] private float _timeToFast = 0.25f;             // time holding movement before fast is allowed
     [SerializeField, Range(0f, 1f)] private float _fastInputThreshold = 0.75f; // stick magnitude to allow fast
 
@@ -183,23 +184,22 @@ private float _groundedSince = -1f;
 }
 
     private void Update()
+{
+    HandleActivationInput();
+    HandleDeactivationInput();
+    HandleSuperSpeedInput();
+    HandleIdleAscendDescendInput();
+
+    // Smooth FOV toward target (applies in & out of flight)
+    if (_playerCam != null && _baseFov > 0f)
     {
-        HandleActivationInput();
-        HandleDeactivationInput();
-        HandleSuperSpeedInput();
-        HandleIdleAscendDescendInput();
-
-        // Smooth FOV toward target (applies in & out of flight)
-        if (_playerCam != null && _baseFov > 0f)
-        {
-            // FOV bump only while super is ACTIVE; cancels as soon as super ends
-            float targetFov = _baseFov + (_isFlying && _superActive ? _superSpeedFovIncrease : 0f);
-            _playerCam.fieldOfView = Mathf.Lerp(_playerCam.fieldOfView, targetFov, Time.deltaTime * 8f);
-        }
-
-        if (!_isFlying)
-            SetAnimatorParams(false, 0f);
+        float targetFov = ComputeTargetFov();
+        _playerCam.fieldOfView = Mathf.Lerp(_playerCam.fieldOfView, targetFov, Time.deltaTime * 8f);
     }
+
+    if (!_isFlying)
+        SetAnimatorParams(false, 0f);
+}
 
     private void FixedUpdate()
 {
@@ -289,6 +289,49 @@ private float _groundedSince = -1f;
         _activationHeld = false;
         _activationTimer = 0f;
     }
+}
+
+/// <summary>
+/// Target FOV:
+/// base + (normal flight boost that ramps linearly with speed from 0→_fastSpeed while input is held)
+///       + (super boost on top, if active)
+/// - No normal boost when there's no movement input (even if you're gliding).
+/// - Super boost stacks (change the return line if you want it to replace instead).
+/// </summary>
+private float ComputeTargetFov()
+{
+    if (_playerCam == null || _baseFov <= 0f)
+        return _playerCam != null ? _playerCam.fieldOfView : 60f;
+
+    // Detect "movement is being held" (WASD or both-mouse autorun)
+    float h = Input.GetAxis("Horizontal");
+    float v = Input.GetAxis("Vertical");
+    bool hasAxisInput = Mathf.Abs(h) > 0.001f || Mathf.Abs(v) > 0.001f;
+
+    var mouse = UnityEngine.InputSystem.Mouse.current;
+    bool bothMouse = mouse != null && mouse.leftButton.isPressed && mouse.rightButton.isPressed;
+
+    bool hasInput = hasAxisInput || bothMouse;
+
+    // Normal flight boost: ramp linearly with speed from 0 → _fastSpeed
+    float normalBoost = 0f;
+    if (_isFlying && hasInput)
+    {
+        // Use current commanded flight speed; clamp to fast cap so super doesn't inflate this part.
+        float speedForRamp = Mathf.Min(_currentSpeed, _fastSpeed);
+
+        // t = 0 at standstill, t = 1 at full fast speed
+        float t = Mathf.Clamp01(Mathf.InverseLerp(0f, _fastSpeed, speedForRamp));
+        normalBoost = t * Mathf.Max(0f, _fastSpeedFovIncrease);
+    }
+
+    // Super adds on top (keep stacking; switch to replace by changing the return line)
+    float superBoost = (_isFlying && _superActive) ? Mathf.Max(0f, _superSpeedFovIncrease) : 0f;
+
+    return _baseFov + normalBoost + superBoost;
+
+    // If you prefer super to REPLACE the normal boost, use this instead:
+    // return _baseFov + (_isFlying && _superActive ? Mathf.Max(0f, _superSpeedFovIncrease) : normalBoost);
 }
 
     private void HandleDeactivationInput()

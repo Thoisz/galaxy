@@ -329,91 +329,138 @@ public class CameraBoostFX : MonoBehaviour
     }
 
     private void LateUpdate()
+{
+    if (playerCamera == null) return;
+
+    // Fresh gravity up
+    _lastUp = playerCamera.GetCurrentGravityUp();
+    if (_lastUp.sqrMagnitude < 1e-6f) _lastUp = Vector3.up;
+
+    // Compute positional lag offset (ascent/fall) or post-land fade
+    Vector3 lagOffset = Vector3.zero;
+
+    if (_phase == Phase.Ascending)
     {
-        if (playerCamera == null) return;
-
-        // Fresh gravity up
-        _lastUp = playerCamera.GetCurrentGravityUp();
-        if (_lastUp.sqrMagnitude < 1e-6f) _lastUp = Vector3.up;
-
-        // Compute positional lag offset (ascent/fall) or post-land fade
-        Vector3 lagOffset = Vector3.zero;
-
-        if (_phase == Phase.Ascending)
+        _ascentTimer += Time.deltaTime;
+        float norm  = (ascentCatchupTime <= 0f) ? 1f : Mathf.Clamp01(_ascentTimer / ascentCatchupTime);
+        float scale = Mathf.Clamp01(ascentLagCurve.Evaluate(norm)); // expect 1→0
+        lagOffset = -_lastUp * (ascentLagMax * scale);
+        _lastAppliedOffset = lagOffset;
+    }
+    else if (_phase == Phase.Falling)
+    {
+        _fallTimer += Time.deltaTime;
+        float norm  = (fallLagRamp <= 0f) ? 1f : Mathf.Clamp01(_fallTimer / fallLagRamp);
+        float scale = Mathf.Clamp01(fallLagCurve.Evaluate(norm)); // expect 0→1
+        lagOffset = -_lastUp * (fallLagMax * scale);
+        _lastAppliedOffset = lagOffset;
+    }
+    else // Idle or Charging
+    {
+        // Post-landing catch-up: ease previous lag to zero
+        if (_lastAppliedOffset.sqrMagnitude > 1e-6f && postLandCatchupTime > 0f)
         {
-            _ascentTimer += Time.deltaTime;
-            float norm  = (ascentCatchupTime <= 0f) ? 1f : Mathf.Clamp01(_ascentTimer / ascentCatchupTime);
-            float scale = Mathf.Clamp01(ascentLagCurve.Evaluate(norm)); // expect 1→0
-            lagOffset = -_lastUp * (ascentLagMax * scale);
-            _lastAppliedOffset = lagOffset;
-        }
-        else if (_phase == Phase.Falling)
-        {
-            _fallTimer += Time.deltaTime;
-            float norm  = (fallLagRamp <= 0f) ? 1f : Mathf.Clamp01(_fallTimer / fallLagRamp);
-            float scale = Mathf.Clamp01(fallLagCurve.Evaluate(norm)); // expect 0→1
-            lagOffset = -_lastUp * (fallLagMax * scale);
-            _lastAppliedOffset = lagOffset;
-        }
-        else // Idle or Charging
-        {
-            // Post-landing catch-up: ease previous lag to zero
-            if (_lastAppliedOffset.sqrMagnitude > 1e-6f && postLandCatchupTime > 0f)
+            _postLandT += Time.deltaTime / Mathf.Max(0.0001f, postLandCatchupTime);
+            float t = Mathf.Clamp01(_postLandT);
+            float scale = Mathf.Clamp01(postLandCurve.Evaluate(t)); // 1→0
+            lagOffset = _lastAppliedOffset * scale;
+
+            if (_postLandT >= 1f)
             {
-                _postLandT += Time.deltaTime / Mathf.Max(0.0001f, postLandCatchupTime);
-                float t = Mathf.Clamp01(_postLandT);
-                float scale = Mathf.Clamp01(postLandCurve.Evaluate(t)); // 1→0
-                lagOffset = _lastAppliedOffset * scale;
-
-                if (_postLandT >= 1f)
-                {
-                    _lastAppliedOffset = Vector3.zero;
-                    _postLandT = 0f;
-                }
-            }
-            else
-            {
-                lagOffset = Vector3.zero;
                 _lastAppliedOffset = Vector3.zero;
+                _postLandT = 0f;
             }
-        }
-
-        // Charging tremble (added on top of lagOffset)
-        Vector3 shakeOffset = Vector3.zero;
-        if (_phase == Phase.Charging && chargeShakeAmplitude > 0f)
-        {
-            Transform basis = cam ? cam.transform : transform;
-            float t = Time.time;
-
-            // Per-channel Perlin in [0,1] → shift to [-1,1]
-            float nx = Mathf.PerlinNoise(_shakeSeed.x, t * chargeShakeFrequency) * 2f - 1f;
-            float ny = Mathf.PerlinNoise(_shakeSeed.y, t * chargeShakeFrequency) * 2f - 1f;
-            float nz = Mathf.PerlinNoise(_shakeSeed.z, t * chargeShakeFrequency) * 2f - 1f;
-
-            float envelope = chargeShakeScaleByCharge ? Mathf.Clamp01(_charge01) : 1f;
-            Vector3 local = new Vector3(nx * chargeShakeAxes.x, ny * chargeShakeAxes.y, nz * chargeShakeAxes.z)
-                            * (chargeShakeAmplitude * envelope);
-
-            // Convert to world using camera local axes
-            Vector3 target =
-                basis.right   * local.x +
-                basis.up      * local.y +
-                basis.forward * local.z;
-
-            // Smooth the shake so it doesn't buzz
-            _chargeShakeOffset = Vector3.Lerp(_chargeShakeOffset, target, 1f - Mathf.Exp(-chargeShakeDamping * Time.deltaTime));
-            shakeOffset = _chargeShakeOffset;
         }
         else
         {
-            // Decay shake to zero quickly when not charging
-            _chargeShakeOffset = Vector3.Lerp(_chargeShakeOffset, Vector3.zero, 1f - Mathf.Exp(-chargeShakeDamping * Time.deltaTime));
-            shakeOffset = _chargeShakeOffset;
+            lagOffset = Vector3.zero;
+            _lastAppliedOffset = Vector3.zero;
         }
-
-        // Hand the combined offset to PlayerCamera
-        playerCamera.SetExternalCameraOffset(lagOffset + shakeOffset);
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // First-person safety: remove vertical drop during FALL (and optionally ascent)
+    // so the camera never sinks below the head pivot (seeing accessories "fall past").
+    if (playerCamera.IsInFirstPerson)
+    {
+        lagOffset = RedirectLagForFirstPerson(lagOffset, _lastUp);
+    }
+    // ─────────────────────────────────────────────────────────────
+
+    // Charging tremble (added on top of lagOffset)
+    Vector3 shakeOffset = Vector3.zero;
+    if (_phase == Phase.Charging && chargeShakeAmplitude > 0f)
+    {
+        Transform basis = cam ? cam.transform : transform;
+        float t = Time.time;
+
+        // Per-channel Perlin in [0,1] → shift to [-1,1]
+        float nx = Mathf.PerlinNoise(_shakeSeed.x, t * chargeShakeFrequency) * 2f - 1f;
+        float ny = Mathf.PerlinNoise(_shakeSeed.y, t * chargeShakeFrequency) * 2f - 1f;
+        float nz = Mathf.PerlinNoise(_shakeSeed.z, t * chargeShakeFrequency) * 2f - 1f;
+
+        float envelope = chargeShakeScaleByCharge ? Mathf.Clamp01(_charge01) : 1f;
+        Vector3 local = new Vector3(nx * chargeShakeAxes.x, ny * chargeShakeAxes.y, nz * chargeShakeAxes.z)
+                        * (chargeShakeAmplitude * envelope);
+
+        // Convert to world using camera local axes
+        Vector3 target =
+            basis.right   * local.x +
+            basis.up      * local.y +
+            basis.forward * local.z;
+
+        // Smooth the shake so it doesn't buzz
+        _chargeShakeOffset = Vector3.Lerp(_chargeShakeOffset, target, 1f - Mathf.Exp(-chargeShakeDamping * Time.deltaTime));
+        shakeOffset = _chargeShakeOffset;
+    }
+    else
+    {
+        // Decay shake to zero quickly when not charging
+        _chargeShakeOffset = Vector3.Lerp(_chargeShakeOffset, Vector3.zero, 1f - Mathf.Exp(-chargeShakeDamping * Time.deltaTime));
+        shakeOffset = _chargeShakeOffset;
+    }
+
+    // Hand the combined offset to PlayerCamera
+    playerCamera.SetExternalCameraOffset(lagOffset + shakeOffset);
+}
+
+/// <summary>
+/// In first-person we don't want vertical lag to sink the camera below the head.
+/// This removes (or redirects) the component along -up and optionally gives a tiny
+/// backward pull for "drag" feel that won't expose the body/accessories.
+/// </summary>
+private Vector3 RedirectLagForFirstPerson(Vector3 lagOffset, Vector3 up)
+{
+    if (lagOffset.sqrMagnitude < 1e-8f) return lagOffset;
+
+    // Remove vertical component entirely (pure safety)
+    Vector3 vertical = Vector3.Project(lagOffset, -up);
+    Vector3 horizontal = lagOffset - vertical;
+
+    // Option A (safe): Zero vertical during Falling; keep horizontal unchanged
+    // If you also want to kill it during Ascent, remove the phase check.
+    if (_phase == Phase.Falling)
+    {
+        // Optional small backward pull to preserve a sense of drag without dipping the camera.
+        // This uses the camera's forward so it works in both FP/TP.
+        Vector3 back = cam ? -cam.transform.forward : -transform.forward;
+
+        // Scale the redirected amount by how much vertical we removed.
+        float vMag = vertical.magnitude;
+
+        // Tunables (feel free to tweak constants or surface as [SerializeField]):
+        const float redirectScale = 0.35f;   // how much of the removed vertical becomes backward drag
+        const float maxMeters     = 0.6f;    // cap how far we can pull back in FP
+
+        Vector3 redirected = back.normalized * Mathf.Min(vMag * redirectScale, maxMeters);
+
+        return horizontal + redirected; // no vertical; tiny backward drag
+    }
+
+    // For other phases (e.g., Ascending) you can keep the vertical,
+    // or also strip it if you noticed similar issues going up.
+    return horizontal;
+}
 
     // ─────────────────────────────────────────────────────
     // Public API (called by BoostJump)
