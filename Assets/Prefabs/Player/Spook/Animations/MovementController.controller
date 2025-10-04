@@ -1946,12 +1946,6 @@ AnimatorController:
   m_Name: MovementController
   serializedVersion: 5
   m_AnimatorParameters:
-  - m_Name: isGrounded
-    m_Type: 4
-    m_DefaultFloat: 0
-    m_DefaultInt: 0
-    m_DefaultBool: 0
-    m_Controller: {fileID: 9100000}
   - m_Name: isRunning
     m_Type: 4
     m_DefaultFloat: 0
@@ -1984,6 +1978,12 @@ AnimatorController:
     m_Controller: {fileID: 9100000}
   - m_Name: airJump
     m_Type: 9
+    m_DefaultFloat: 0
+    m_DefaultInt: 0
+    m_DefaultBool: 0
+    m_Controller: {fileID: 9100000}
+  - m_Name: isGrounded
+    m_Type: 4
     m_DefaultFloat: 0
     m_DefaultInt: 0
     m_DefaultBool: 0
@@ -4001,7 +4001,7 @@ AnimatorStateMachine:
     m_Position: {x: 180, y: -2480, z: 0}
   - serializedVersion: 1
     m_State: {fileID: 7395518400010428911}
-    m_Position: {x: 1430, y: -2630, z: 0}
+    m_Position: {x: 1400, y: -2630, z: 0}
   - serializedVersion: 1
     m_State: {fileID: 5522789118479258041}
     m_Position: {x: 300, y: -2170, z: 0}
@@ -4010,10 +4010,10 @@ AnimatorStateMachine:
     m_Position: {x: 930, y: -1930, z: 0}
   - serializedVersion: 1
     m_State: {fileID: -8417736788498349565}
-    m_Position: {x: 760, y: -2990, z: 0}
+    m_Position: {x: 800, y: -2990, z: 0}
   - serializedVersion: 1
     m_State: {fileID: 2549486375388634891}
-    m_Position: {x: 500, y: -2850, z: 0}
+    m_Position: {x: 510, y: -2820, z: 0}
   - serializedVersion: 1
     m_State: {fileID: -8852129453100506924}
     m_Position: {x: 1260, y: -1000, z: 0}

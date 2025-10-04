@@ -50,6 +50,11 @@ public class PlayerCamera : MonoBehaviour
     [SerializeField] private float directionBlendTime = 0.5f;
     [SerializeField] private float transitionStabilizationTime = 0.2f; // New setting
 
+    // Spooky Dash / Camera-phase integration
+[Header("Spooky Dash / Phase Camera")]
+[SerializeField] private string phaseableLayerName = "Phaseable";
+private int _phaseableLayerIndex = -1;
+
     // Component references
     private Camera playerCamera;
     private Rigidbody playerRigidbody;
@@ -124,6 +129,9 @@ public class PlayerCamera : MonoBehaviour
 
     private Vector3 _externalCamOffsetWS = Vector3.zero;
 
+    private int  _collisionMaskBeforePhase;
+private bool _phaseableIgnoreActive = false;
+
     private void Start()
     {
         // Get component references
@@ -134,6 +142,9 @@ public class PlayerCamera : MonoBehaviour
         if (!playerRigidbody) Debug.LogError("No Rigidbody found on the target.");
 
         playerTransform = target;
+
+        // Resolve Phaseable layer once
+ResolvePhaseableLayerIndex();
 
         // Get the GravityBody component
         gravityBody = target.GetComponent<GravityBody>();
@@ -705,6 +716,32 @@ private IEnumerator DelayedAutoAlignBehindPlayerRoutine(float idleSeconds, float
     _autoAlignRoutine = null;
 }
 
+// Resolve and cache the Phaseable layer index
+private void ResolvePhaseableLayerIndex()
+{
+    if (_phaseableLayerIndex >= 0) return;
+
+    _phaseableLayerIndex = LayerMask.NameToLayer(phaseableLayerName);
+    if (_phaseableLayerIndex < 0)
+    {
+        Debug.LogWarning($"[PlayerCamera] Layer '{phaseableLayerName}' not found. " +
+                         "Create it in Project Settings > Tags & Layers or change 'phaseableLayerName'.");
+    }
+}
+
+/// <summary>
+/// Wrapper used by SpookyDash. Removes the Phaseable bit from camera collision mask while phasing,
+/// restores it afterward. Uses your existing SetPhaseableCollisionIgnore under the hood.
+/// </summary>
+public void SetCollisionMaskPhaseIgnore(bool ignore)
+{
+    ResolvePhaseableLayerIndex();
+    if (_phaseableLayerIndex < 0) return;
+
+    // Reuse your existing API that already backs up/restores the mask
+    SetPhaseableCollisionIgnore(ignore, _phaseableLayerIndex);
+}
+
     private void UpdateCameraPosition()
 {
     currentZoomDistance = Mathf.Lerp(currentZoomDistance, targetZoomDistance, Time.deltaTime * zoomSmoothing);
@@ -801,6 +838,44 @@ private IEnumerator DelayedAutoAlignBehindPlayerRoutine(float idleSeconds, float
     // Visual-only yaw toward input on the current gravity plane
     Vector3 up = currentGravityZoneUp;
     YawVisualToward(worldMoveDir, up, characterRotationSpeed);
+}
+
+/// <summary>
+/// Temporarily removes the given Phaseable layer bit from the camera's collisionMask while <paramref name="on"/> is true.
+/// When turned off, restores the mask to its pre-phase value.
+/// </summary>
+/// <param name="on">Enable/disable the ignore.</param>
+/// <param name="phaseableLayer">Layer index (0..31) for the Phaseable layer.</param>
+public void SetPhaseableCollisionIgnore(bool on, int phaseableLayer)
+{
+    int bit = 1 << phaseableLayer;
+
+    if (on)
+    {
+        if (!_phaseableIgnoreActive)
+        {
+            // backup once at activation
+            _collisionMaskBeforePhase = collisionMask;
+            _phaseableIgnoreActive = true;
+        }
+
+        // clear the Phaseable bit
+        collisionMask &= ~bit;
+    }
+    else
+    {
+        if (_phaseableIgnoreActive)
+        {
+            // restore exactly what we had before phasing
+            collisionMask = _collisionMaskBeforePhase;
+            _phaseableIgnoreActive = false;
+        }
+        else
+        {
+            // Safety: ensure Phaseable is at least allowed again
+            collisionMask |= bit;
+        }
+    }
 }
 
 /// <summary>
