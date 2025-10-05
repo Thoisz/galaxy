@@ -4237,8 +4237,73 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _playerDash: {fileID: 636263582}
+  _playerCamera: {fileID: 1019612833}
   _playerPhaseLayerName: PlayerPhase
   _phaseGraceAfterDash: 0.12
+  _specialCooldown: 1.5
+  _spookyModelPrefab: {fileID: 0}
+  _spookySpawnParent: {fileID: 0}
+  _spookyDashStateName: SpookyDash
+  _spookyDashLayer: 0
+  _normalVisualRoot: {fileID: 0}
+  _useModelCrossfade: 1
+  _modelCrossfadeDuration: 0.12
+  _afterimageEnabled: 1
+  _afterimageMaterial: {fileID: 2100000, guid: c20ce36d862562449ae1e15141da2a37, type: 2}
+  _spawnInterval: 0.08
+  _ghostLifetime: 0.4
+  _alphaOverLife:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0.9999982
+      inSlope: -0.9999982
+      outSlope: -0.9999982
+      tangentMode: 34
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0.33333334
+    - serializedVersion: 3
+      time: 1
+      value: 0
+      inSlope: -0.9999982
+      outSlope: -0.9999982
+      tangentMode: 34
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  _scaleJitter: 0.04
+  _posJitter: 0.02
+  _postDashLinger: 0
+  _postDashAlphaOverTime:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 1
+      inSlope: -1
+      outSlope: -1
+      tangentMode: 34
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0.33333334
+    - serializedVersion: 3
+      time: 1
+      value: 0
+      inSlope: -1
+      outSlope: -1
+      tangentMode: 34
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  _postDashSpawnIntervalScale: 0.5
   _log: 1
 --- !u!1 &640391299
 GameObject:
@@ -6495,7 +6560,7 @@ MonoBehaviour:
   maxGravityRelativePitch: 89
   collisionMask:
     serializedVersion: 2
-    m_Bits: 9
+    m_Bits: 4105
   collisionBuffer: 0.2
   collisionQuality: 10
   targetOffset: {x: 0, y: 1.1, z: 0}
@@ -6518,6 +6583,7 @@ MonoBehaviour:
   preserveDirectionDuringTransition: 1
   directionBlendTime: 0.5
   transitionStabilizationTime: 0.2
+  phaseableLayerName: Phaseable
 --- !u!4 &1019612834
 Transform:
   m_ObjectHideFlags: 0
@@ -16683,6 +16749,10 @@ PrefabInstance:
       propertyPath: portrait
       value: 
       objectReference: {fileID: 573986627}
+    - target: {fileID: 4267541068490667681, guid: f39991892847afc45ba8bd01ad2057a7, type: 3}
+      propertyPath: baseStamina
+      value: 9999
+      objectReference: {fileID: 0}
     - target: {fileID: 4267541068490667681, guid: f39991892847afc45ba8bd01ad2057a7, type: 3}
       propertyPath: staminaBarFill
       value: 
