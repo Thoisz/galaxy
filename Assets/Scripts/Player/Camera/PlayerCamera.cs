@@ -49,6 +49,7 @@ public class PlayerCamera : MonoBehaviour
     [SerializeField] private bool preserveDirectionDuringTransition = true;
     [SerializeField] private float directionBlendTime = 0.5f;
     [SerializeField] private float transitionStabilizationTime = 0.2f; // New setting
+    
 
     // Spooky Dash / Camera-phase integration
 [Header("Spooky Dash / Phase Camera")]

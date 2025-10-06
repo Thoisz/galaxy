@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -6,65 +7,78 @@ using UnityEngine;
 public class SpookyDash : MonoBehaviour
 {
     [Header("References")]
-    [Tooltip("Auto-grabbed if left null.")]
-    [SerializeField] private PlayerDash _playerDash;
-    [Tooltip("Optional: if assigned, we’ll toggle its camera-collision mask to ignore Phaseable while phasing.")]
-    [SerializeField] private PlayerCamera _playerCamera;
+    [SerializeField] private PlayerDash _playerDash;      // auto-grabbed if null
+    [SerializeField] private PlayerCamera _playerCamera;  // optional; auto-found if null
 
     [Header("Phase (collision)")]
     [SerializeField] private string _playerPhaseLayerName = "PlayerPhase";
-    [Tooltip("Remain intangible this long after a spooky dash ends to avoid snagging in colliders.")]
     [SerializeField] private float _phaseGraceAfterDash = 0.12f;
 
-    [Header("Spooky Cooldown")]
-    [Tooltip("Seconds before the next spooky dash becomes available again.")]
-    [SerializeField] private float _specialCooldown = 15f;
-
-    // ─────────────────────────────────────────────────────────────────────────────
-    // SPOOKY MODEL SWAP
-    [Header("Spooky Model")]
-    [Tooltip("Your ghost/whisp FBX prefab with its own Animator.")]
-    [SerializeField] private GameObject _spookyModelPrefab;
-
-    [Tooltip("Optional parent for the spooky model. If empty, we’ll use the normal visual root’s parent.")]
-    [SerializeField] private Transform _spookySpawnParent;
-
-    [Tooltip("The state name inside the spooky model’s Animator to play on dash start.")]
-    [SerializeField] private string _spookyDashStateName = "SpookyDash";
-
-    [Tooltip("The layer index for the spooky dash state (usually 0).")]
-    [SerializeField] private int _spookyDashLayer = 0;
-
-    [Header("Visual Roots")]
-    [Tooltip("Root of the NORMAL player visuals (the kid model). If unset, auto-detected from a child Animator.")]
-    [SerializeField] private Transform _normalVisualRoot;
-
-    [Header("Model Crossfade")]
-    [SerializeField] private bool _useModelCrossfade = true;
-    [SerializeField, Range(0f, 0.3f)] private float _modelCrossfadeDuration = 0.12f;
-
-    // ─────────────────────────────────────────────────────────────────────────────
-    // Afterimage (ectoplasm wisp trail)
-    [Header("Afterimage (Ectoplasm Wisp Trail) — ONLY for spooky dash")]
+    [Header("Afterimage (Ectoplasm Wisp Trail)")]
     [SerializeField] private bool _afterimageEnabled = true;
-    [Tooltip("Unlit Transparent/Additive material. Its color & alpha set the max tint/opacity.")]
+    [Tooltip("Unlit Transparent or Additive material. Color *and alpha* drive max opacity.")]
     [SerializeField] private Material _afterimageMaterial;
     [SerializeField] private float _spawnInterval = 0.03f;
     [SerializeField] private float _ghostLifetime = 0.25f;
-    [SerializeField] private AnimationCurve _alphaOverLife = null; // 0..1
+    [SerializeField] private AnimationCurve _alphaOverLife = null; // 0..1; multiplied by material alpha
     [SerializeField, Range(0f, 0.25f)] private float _scaleJitter = 0.04f;
     [SerializeField, Range(0f, 0.10f)] private float _posJitter = 0.02f;
 
-    [Header("Post-Dash Linger (only for spooky dash)")]
-    [Tooltip("Keep spawning faint ghosts after dash ends for a smoother fade-out.")]
+    [Header("Afterimage Window")]
+    [Tooltip("Only emit afterimages during this early portion of the spooky window.")]
+    [SerializeField, Range(0f, 1f)] private float _trailFirstPortion = 0.30f;
+
+    [Header("Color Preservation")]
+    [SerializeField] private bool _preserveColorWhenFading = true;
+    [SerializeField] private float _colorBoostClamp = 1.75f;
+
+    [Header("Post-Dash Linger")]
     [SerializeField] private float _postDashLinger = 0.18f;
-    [Tooltip("Global alpha multiplier during linger (1→0). Multiplies your material alpha.")]
     [SerializeField] private AnimationCurve _postDashAlphaOverTime = null;
-    [Tooltip("How much to slow the spawn rate by the end (1 = same as during dash).")]
     [SerializeField] private float _postDashSpawnIntervalScale = 1.6f;
+
+    [Header("Player Transparency During Spooky Dash")]
+    [Tooltip("If enabled, the player fades while spooky dash (incl. grace) is active.")]
+    [SerializeField] private bool _transparencyEnabled = true;
+
+    [Tooltip("Overall opacity while spooky window is early (0=invisible, 1=opaque).")]
+    [SerializeField, Range(0f, 1f)] private float _transparencyAlpha = 0.4f;
+
+    [Tooltip("Shader used when NOT spooky (opaque). Drag the Shader asset here.")]
+    [SerializeField] private Shader _opaqueShader;
+
+    [Tooltip("Shader used WHILE spooky (transparent). Drag the Shader asset here.")]
+    [SerializeField] private Shader _transparentShader;
+
+    [Tooltip("Opacity property Reference name from your Shader Graph (include underscore).")]
+    [SerializeField] private string _opacityPropertyName = "_Opacity";
+    [SerializeField, Min(0f)] private float _fadeInDuration = 0.12f;
+    [SerializeField, Min(0f)] private float _fadeOutDuration = 0.12f;
+
+    [Header("Dash→Opaque Timing")]
+    [SerializeField, Range(0f, 1f)]
+    private float _fadeBackStartNormalized = 0.70f;  // start fade-back at 70% of spooky window
+    [SerializeField]
+    private float _dashDurationHint = 0.35f;         // used if we can't read real duration
+
+    [Header("Spooky Duration & Cooldown")]
+    [Tooltip("Spooky dash lasts this multiple of the regular dash (effects window).")]
+    [SerializeField] private float _spookyDurationMultiplier = 1.5f; // 1.5×
+    [Tooltip("Cooldown between spooky dashes (seconds).")]
+    [SerializeField] private float _cooldownSeconds = 15f;           // default 15s
+
+    [Header("Bubble Pop")]
+    [Tooltip("One-shot bubble pop spawned at dash start (no follow).")]
+    [SerializeField] private ParticleSystem _bubbleFXPrefab;
+    [Tooltip("Bone used to place the bubble pop (e.g., hips). Not parented.")]
+    [SerializeField] private Transform _hipBone;
 
     [Header("Debug")]
     [SerializeField] private bool _log = false;
+
+    // ── Optional events to gate Animator externally (fires ONCE per spooky window)
+    public event Action OnSpookyWindowBegan;
+    public event Action OnSpookyWindowEnded;
 
     // ── Phase state
     private int _playerPhaseLayer = -1;
@@ -76,27 +90,41 @@ public class SpookyDash : MonoBehaviour
     // ── Afterimage state
     private Coroutine _trailRoutine;
     private Coroutine _lingerRoutine;
+
+    // ── Renderers
     private SkinnedMeshRenderer[] _skinned;
     private MeshRenderer[] _staticMeshes;
+
+    // ── Track spawned ghosts
     private readonly List<GhostFade> _liveGhosts = new List<GhostFade>();
 
-    // ── Spooky cooldown gating
-    private bool _spookyReady = true;          // off cooldown → next dash will be spooky
-    private float _cooldownRemaining = 0f;     // counts down after a spooky dash
-    private bool _spookyDashActive = false;    // currently in a spooky dash (or grace)
-    private bool _wasDashing = false;          // edge detect PlayerDash state
+    // ── Transparency / shader-swap state
+    private MaterialPropertyBlock _mpbTrans;
+    private int _opacityID;
+    private static readonly int _ColorID      = Shader.PropertyToID("_Color");
+    private static readonly int _BaseColorID  = Shader.PropertyToID("_BaseColor");
+    private static readonly int _SurfaceID    = Shader.PropertyToID("_Surface");
+    private static readonly int _QueueCtrlID  = Shader.PropertyToID("_QueueControl");
+    private static readonly int _QueueOffID   = Shader.PropertyToID("_QueueOffset");
+    private static readonly int _ZWriteCtrlID = Shader.PropertyToID("_ZWriteControl");
 
-    // ── Spooky model instance & anim
-    private GameObject _spookyInstance;
-    private Animator _spookyAnimator;
+    private bool _materialsInstanced;
+    private float _currentOpacity = 1f;
+    private float _opacityVel = 0f;
 
-    // ── Normal & Spooky renderer caches for crossfade
-    private Renderer[] _normalRenderers;
-    private Renderer[] _spookyRenderers;
+    // ── Dash timing/progress (spooky window)
+    private bool  _wasDashingLastFrame;
+    private float _dashStartTime;
+    private float _dashDurationKnown;             // regular dash duration we know/hint
+    private bool  _spookyActiveThisDash;          // accepted for this dash
+    private bool  _spookySuppressedThisDash;      // denied due to cooldown
+    private float _spookyEndTime;                 // end of spooky window (1.5×)
+    private bool  _spookyAnimFired;               // for external anim gating if you need it
 
-    // cached color property IDs (for afterimages only)
-    private static readonly int _ColorID     = Shader.PropertyToID("_Color");
-    private static readonly int _BaseColorID = Shader.PropertyToID("_BaseColor");
+    // ── Cooldown
+    private float _cooldownReadyTime = 0f;
+    public bool  IsCooldownReady   => Time.time >= _cooldownReadyTime;
+    public float CooldownRemaining => Mathf.Max(0f, _cooldownReadyTime - Time.time);
 
     // ─────────────────────────────────────────────────────────────────────────────
     private void Awake()
@@ -105,7 +133,8 @@ public class SpookyDash : MonoBehaviour
         if (_playerDash == null)
         {
             Debug.LogError("[SpookyDash] No PlayerDash found on this object.");
-            enabled = false; return;
+            enabled = false;
+            return;
         }
 
         if (_playerCamera == null)
@@ -113,30 +142,40 @@ public class SpookyDash : MonoBehaviour
 
         _playerPhaseLayer = LayerMask.NameToLayer(_playerPhaseLayerName);
         if (_playerPhaseLayer < 0)
-            Debug.LogError($"[SpookyDash] Layer '{_playerPhaseLayerName}' not found. Create it and set PlayerPhase×Phaseable to NOT collide.");
+            Debug.LogError($"[SpookyDash] Layer '{_playerPhaseLayerName}' not found. Configure it & collision matrix PlayerPhase×Phaseable = false.");
 
-        // Normal visual root auto-detect if not provided
-        if (_normalVisualRoot == null)
-        {
-            var anim = GetComponentInChildren<Animator>();
-            _normalVisualRoot = anim ? anim.transform : transform;
-        }
-
+        RefreshPlayerColliders();
         CacheRenderers();
 
         if (_alphaOverLife == null || _alphaOverLife.length == 0)
             _alphaOverLife = AnimationCurve.EaseInOut(0, 1, 1, 0);
-
         if (_postDashAlphaOverTime == null || _postDashAlphaOverTime.length == 0)
             _postDashAlphaOverTime = AnimationCurve.Linear(0, 1, 1, 0);
+
+        _mpbTrans  = new MaterialPropertyBlock();
+        _opacityID = Shader.PropertyToID(_opacityPropertyName);
+
+        if (_opaqueShader == null)       Debug.LogWarning("[SpookyDash] Opaque shader not assigned.");
+        if (_transparentShader == null)  Debug.LogWarning("[SpookyDash] Transparent shader not assigned.");
     }
 
     private void OnEnable()
     {
         SetPhase(false, force: true);
-        _wasDashing = false;
-        _spookyDashActive = false;
-        HideSpookyInstanceImmediate(); // safety on re-enable
+        StopTrailImmediate();
+        StopLingerImmediate();
+        KillAllGhostsImmediate();
+
+        _currentOpacity = 1f;
+        _opacityVel = 0f;
+        RestoreOpacityAndShader();
+
+        SetCameraPhaseIgnore(false);
+
+        _cooldownReadyTime = Time.time; // allow first spooky immediately
+        _spookyActiveThisDash = false;
+        _spookySuppressedThisDash = false;
+        _spookyAnimFired = false;
     }
 
     private void OnDisable()
@@ -145,102 +184,356 @@ public class SpookyDash : MonoBehaviour
         StopTrailImmediate();
         StopLingerImmediate();
         KillAllGhostsImmediate();
-        HideSpookyInstanceImmediate();
+        RestoreOpacityAndShader();
+        SetCameraPhaseIgnore(false);
     }
 
     private void Update()
     {
-        // Cooldown tick
-        if (!_spookyReady && _cooldownRemaining > 0f)
-        {
-            _cooldownRemaining -= Time.deltaTime;
-            if (_cooldownRemaining <= 0f)
-            {
-                _cooldownRemaining = 0f;
-                _spookyReady = true;
-                if (_log) Debug.Log("[SpookyDash] Special cooldown ready — next dash will be SPOOKY.");
-            }
-        }
-
         bool isDashing = _playerDash != null && _playerDash.IsDashing();
 
-        // Edge: dash just started
-        if (isDashing && !_wasDashing)
+        // Edge-detect: dash started
+        if (isDashing && !_wasDashingLastFrame)
         {
-            if (_spookyReady)
+            _dashStartTime     = Time.time;
+            _dashDurationKnown = Mathf.Max(0.01f, _dashDurationHint);
+
+            if (IsCooldownReady)
             {
-                BeginSpookyDash();
+                _spookyActiveThisDash     = true;
+                _spookySuppressedThisDash = false;
+                _spookyAnimFired          = false;
+
+                float spookyDur = _dashDurationKnown * Mathf.Max(1f, _spookyDurationMultiplier);
+                _spookyEndTime  = _dashStartTime + spookyDur;
+
+                // Start cooldown now (exactly one spooky per cooldown)
+                _cooldownReadyTime = Time.time + Mathf.Max(0f, _cooldownSeconds);
+
+                OnSpookyWindowBegan?.Invoke();
+                if (_log) Debug.Log($"[SpookyDash] Spooky OPEN ({spookyDur:0.###}s). Cooldown until {_cooldownReadyTime:0.###}");
+
+                SpawnBubbleFXOnce(); // one-shot bubble pop
             }
             else
             {
-                CancelSpookyFXImmediate();
+                _spookyActiveThisDash     = false;
+                _spookySuppressedThisDash = true;
+                if (_log) Debug.Log("[SpookyDash] Spooky DENIED (cooldown).");
             }
         }
-        // Edge: dash just ended
-        else if (!isDashing && _wasDashing)
+        _wasDashingLastFrame = isDashing;
+
+        // Window flags
+        float spookyProgress = GetSpookyProgress01();
+        bool withinSpookyWindow = _spookyActiveThisDash && Time.time < _spookyEndTime;
+        bool spookyMainActive   = _spookyActiveThisDash && (isDashing || withinSpookyWindow);
+
+        // === Afterimage: only on early portion of spooky window ===
+        if (_afterimageEnabled)
         {
-            if (_spookyDashActive)
+            bool inTrailPortion = spookyMainActive && (spookyProgress <= Mathf.Clamp01(_trailFirstPortion));
+            if (inTrailPortion && _trailRoutine == null)
             {
-                EndSpookyDashAndStartCooldown();
+                StopLingerImmediate();
+                _trailRoutine = StartCoroutine(SpawnTrailWhileWindowPortion(
+                    () => GetSpookyProgress01() <= Mathf.Clamp01(_trailFirstPortion)));
             }
-            else
+            else if (!inTrailPortion && _trailRoutine != null)
             {
-                CancelSpookyFXImmediate();
+                StopTrailImmediate();
+                if (_postDashLinger > 0f && _spookyActiveThisDash)
+                    _lingerRoutine = StartCoroutine(SpawnTrailLinger());
             }
+        }
+        else
+        {
+            StopTrailImmediate();
         }
 
-        _wasDashing = isDashing;
+        // === Phase: keyed to spooky window + grace ===
+        if (spookyMainActive)
+        {
+            if (_phaseGraceRoutine != null) { StopCoroutine(_phaseGraceRoutine); _phaseGraceRoutine = null; }
+            SetPhase(true);
+        }
+        else if (_spookyActiveThisDash && !_spookySuppressedThisDash)
+        {
+            if (_isPhasing && _phaseGraceRoutine == null)
+                _phaseGraceRoutine = StartCoroutine(PhaseGraceThenRestore());
+        }
+        else
+        {
+            if (_isPhasing && _phaseGraceRoutine == null)
+                SetPhase(false);
+        }
+
+        // Camera mask ignore: active during window OR grace
+        bool spookyActiveForCamera = (_spookyActiveThisDash && (spookyMainActive || _phaseGraceRoutine != null));
+        SetCameraPhaseIgnore(spookyActiveForCamera);
+
+        // Transparency: fade back over tail of spooky window; opaque in grace/off
+        UpdateTransparencyBlock(spookyMainActive, (spookyMainActive || _phaseGraceRoutine != null));
+
+        // Close window end signal when fully over & no grace running
+        if (_spookyActiveThisDash && Time.time >= _spookyEndTime && _phaseGraceRoutine == null)
+        {
+            OnSpookyWindowEnded?.Invoke();
+            _spookyActiveThisDash = false;
+            _spookyAnimFired = true; // lock anyway
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // Spooky dash lifecycle
-    private void BeginSpookyDash()
+    // Bubble pop (one-shot at hip; no parenting; no follow)
+    private void SpawnBubbleFXOnce()
     {
-        if (_log) Debug.Log("[SpookyDash] >>> BEGIN SPOOKY DASH");
-        _spookyDashActive = true;
+        if (_bubbleFXPrefab == null || _hipBone == null) return;
 
-        if (_phaseGraceRoutine != null) { StopCoroutine(_phaseGraceRoutine); _phaseGraceRoutine = null; }
-        SetPhase(true);
-        SetCameraPhaseIgnore(true);
+        // Use prefab rotation exactly as-authored; world position at hip.
+        ParticleSystem ps = Instantiate(_bubbleFXPrefab, _hipBone.position, _bubbleFXPrefab.transform.rotation);
 
-        // Swap to spooky visuals
-        ShowSpookyModel();
+        // Ensure world simulation so it never inherits later movement
+        var main = ps.main;
+        main.simulationSpace = ParticleSystemSimulationSpace.World;
 
-        // Afterimages only for spooky dash
-        if (_afterimageEnabled && _trailRoutine == null)
-            _trailRoutine = StartCoroutine(SpawnTrailWhileDashing());
+        if (!ps.isPlaying) ps.Play();
     }
 
-    private void EndSpookyDashAndStartCooldown()
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Transparency logic
+    private void UpdateTransparencyBlock(bool spookyMainActive, bool spookyActiveInclGrace)
     {
-        if (_log) Debug.Log("[SpookyDash] <<< END SPOOKY DASH → cooldown");
+        if (!_transparencyEnabled)
+        {
+            _currentOpacity = 1f;
+            _opacityVel = 0f;
+            SwitchAllMaterialsShader(useTransparent: false);
+            RestoreOpacityToAll();
+            return;
+        }
 
-        // Stop continuous trail spawning, then do a soft post-dash linger
-        StopTrailImmediate();
-        if (_afterimageEnabled && _postDashLinger > 0f)
-            _lingerRoutine = StartCoroutine(SpawnTrailLinger());
+        float targetOpacity;
+        float smoothTime;
 
-        // Phase grace window, then restore collisions & camera mask and swap visuals back
-        if (_phaseGraceRoutine != null) StopCoroutine(_phaseGraceRoutine);
-        _phaseGraceRoutine = StartCoroutine(PhaseGraceThenRestore());
+        if (spookyMainActive)
+        {
+            float dashT = GetSpookyProgress01();
+            if (dashT < _fadeBackStartNormalized)
+            {
+                targetOpacity = _transparencyAlpha;
+                smoothTime    = _fadeInDuration;
+            }
+            else
+            {
+                float u = Mathf.InverseLerp(_fadeBackStartNormalized, 1f, dashT); // 0..1
+                targetOpacity = Mathf.Lerp(_transparencyAlpha, 1f, u);
+                smoothTime    = _fadeOutDuration;
+            }
+        }
+        else if (spookyActiveInclGrace) // finish to opaque in grace
+        {
+            targetOpacity = 1f;
+            smoothTime    = _fadeOutDuration;
+        }
+        else
+        {
+            targetOpacity = 1f;
+            smoothTime    = _fadeOutDuration;
+        }
 
-        _spookyDashActive = false;
-        _spookyReady = false;
-        _cooldownRemaining = Mathf.Max(0.01f, _specialCooldown);
+        if (smoothTime <= 0f)
+        {
+            _currentOpacity = targetOpacity;
+            _opacityVel = 0f;
+        }
+        else
+        {
+            _currentOpacity = Mathf.SmoothDamp(_currentOpacity, targetOpacity, ref _opacityVel, smoothTime);
+        }
+
+        bool wantTransparentShader = _currentOpacity < 0.999f;
+        SwitchAllMaterialsShader(useTransparent: wantTransparentShader);
+        ApplyOpacityToAll(_currentOpacity);
     }
 
-    private void CancelSpookyFXImmediate()
+    /// <summary>0..1 progress through the *spooky* window (1.5× the dash). 1 if not active.</summary>
+    private float GetSpookyProgress01()
     {
-        if (_phaseGraceRoutine != null) { StopCoroutine(_phaseGraceRoutine); _phaseGraceRoutine = null; }
-        SetPhase(false);
-        SetCameraPhaseIgnore(false);
+        if (!_spookyActiveThisDash) return 1f;
+        float start = _dashStartTime;
+        float end   = _spookyEndTime;
+        if (end <= start) return 1f;
+        return Mathf.Clamp01((Time.time - start) / (end - start));
+    }
 
-        StopTrailImmediate();
-        StopLingerImmediate();
+    // Optional: allow PlayerDash to report the precise duration (perfect timing)
+    public void OnDashStarted(float durationSeconds)
+    {
+        _dashDurationKnown = Mathf.Max(0.01f, durationSeconds);
+        _dashStartTime = Time.time;
 
-        // Snap visuals back to normal immediately
-        HideSpookyInstanceImmediate();
-        SetRenderersEnabled(_normalRenderers, true);
+        if (IsCooldownReady)
+        {
+            _spookyActiveThisDash     = true;
+            _spookySuppressedThisDash = false;
+            _spookyAnimFired          = false;
+
+            float spookyDur = _dashDurationKnown * Mathf.Max(1f, _spookyDurationMultiplier);
+            _spookyEndTime  = _dashStartTime + spookyDur;
+            _cooldownReadyTime = Time.time + Mathf.Max(0f, _cooldownSeconds);
+
+            OnSpookyWindowBegan?.Invoke();
+            if (_log) Debug.Log($"[SpookyDash] (OnDashStarted) Spooky {spookyDur:0.###}s; cooldown ticking.");
+            SpawnBubbleFXOnce();
+        }
+        else
+        {
+            _spookyActiveThisDash     = false;
+            _spookySuppressedThisDash = true;
+        }
+
+        _wasDashingLastFrame = true;
+    }
+
+    public void OnDashEnded()
+    {
+        _wasDashingLastFrame = false;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Shader/material helpers
+    private void CacheRenderers()
+    {
+        _skinned = GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        _staticMeshes = GetComponentsInChildren<MeshRenderer>(true);
+    }
+
+    private void EnsureInstancedMaterials()
+    {
+        if (_materialsInstanced) return;
+
+        if (_skinned != null)
+            foreach (var r in _skinned) { if (!r) continue; var mats = r.materials; r.materials = mats; }
+        if (_staticMeshes != null)
+            foreach (var r in _staticMeshes) { if (!r || r is SkinnedMeshRenderer) continue; var mats = r.materials; r.materials = mats; }
+
+        _materialsInstanced = true;
+    }
+
+    private void SwitchAllMaterialsShader(bool useTransparent)
+    {
+        Shader target = useTransparent ? _transparentShader : _opaqueShader;
+        if (!target) return;
+
+        EnsureInstancedMaterials();
+
+        if (_skinned != null)
+        {
+            foreach (var r in _skinned)
+            {
+                if (!r) continue;
+                var mats = r.materials;
+                for (int i = 0; i < mats.Length; i++)
+                {
+                    var m = mats[i]; if (!m) continue;
+                    if (m.shader != target) m.shader = target;
+                    ConfigureShaderGraphSurface(m, useTransparent);
+                }
+            }
+        }
+
+        if (_staticMeshes != null)
+        {
+            foreach (var r in _staticMeshes)
+            {
+                if (!r || r is SkinnedMeshRenderer) continue;
+                var mats = r.materials;
+                for (int i = 0; i < mats.Length; i++)
+                {
+                    var m = mats[i]; if (!m) continue;
+                    if (m.shader != target) m.shader = target;
+                    ConfigureShaderGraphSurface(m, useTransparent);
+                }
+            }
+        }
+    }
+
+    private void ConfigureShaderGraphSurface(Material m, bool transparent)
+    {
+        if (m.HasProperty(_SurfaceID))    m.SetFloat(_SurfaceID, transparent ? 1f : 0f);
+        if (m.HasProperty(_ZWriteCtrlID)) m.SetFloat(_ZWriteCtrlID, transparent ? 2f : 0f);
+        if (m.HasProperty(_QueueCtrlID))  m.SetFloat(_QueueCtrlID, 1f);
+        if (m.HasProperty(_QueueOffID))   m.SetFloat(_QueueOffID, 0f);
+        m.renderQueue = transparent ? 3000 : 2000;
+
+        if (transparent) { m.EnableKeyword("_SURFACE_TYPE_TRANSPARENT"); m.DisableKeyword("_ALPHATEST_ON"); }
+        else             { m.DisableKeyword("_SURFACE_TYPE_TRANSPARENT"); }
+    }
+
+    private void SetCameraPhaseIgnore(bool on)
+    {
+        if (_playerCamera == null) return;
+        _playerCamera.SetCollisionMaskPhaseIgnore(on);
+    }
+
+    private void ApplyOpacityToAll(float opacity01)
+    {
+        opacity01 = Mathf.Clamp01(opacity01);
+
+        if (_skinned != null) foreach (var r in _skinned) ApplyOpacity(r, opacity01);
+        if (_staticMeshes != null)
+            foreach (var r in _staticMeshes) if (!(r is SkinnedMeshRenderer)) ApplyOpacity(r, opacity01);
+    }
+
+    private void ApplyOpacity(Renderer r, float opacity01)
+    {
+        if (!r || !r.enabled || !r.gameObject.activeInHierarchy) return;
+
+        if (_mpbTrans == null) _mpbTrans = new MaterialPropertyBlock();
+
+        r.GetPropertyBlock(_mpbTrans);
+        _mpbTrans.SetFloat(_opacityID, opacity01);
+        r.SetPropertyBlock(_mpbTrans);
+
+        var mats = r.materials;
+        for (int i = 0; i < mats.Length; i++)
+        {
+            var m = mats[i]; if (!m) continue;
+
+            if (m.HasProperty(_opacityID)) m.SetFloat(_opacityID, opacity01);
+            else
+            {
+                int colorProp = m.HasProperty(_BaseColorID) ? _BaseColorID :
+                                (m.HasProperty(_ColorID) ? _ColorID : -1);
+                if (colorProp != -1)
+                {
+                    var c = m.GetColor(colorProp);
+                    c.a = opacity01;
+                    m.SetColor(colorProp, c);
+                }
+            }
+        }
+    }
+
+    private void RestoreOpacityToAll()
+    {
+        if (_skinned != null) foreach (var r in _skinned) if (r) r.SetPropertyBlock(null);
+        if (_staticMeshes != null) foreach (var r in _staticMeshes) if (r && !(r is SkinnedMeshRenderer)) r.SetPropertyBlock(null);
+
+        if (_skinned != null)
+            foreach (var r in _skinned)
+                foreach (var m in r.materials) if (m && m.HasProperty(_opacityID)) m.SetFloat(_opacityID, 1f);
+
+        if (_staticMeshes != null)
+            foreach (var r in _staticMeshes)
+                foreach (var m in r.materials) if (m && m.HasProperty(_opacityID)) m.SetFloat(_opacityID, 1f);
+    }
+
+    private void RestoreOpacityAndShader()
+    {
+        RestoreOpacityToAll();
+        SwitchAllMaterialsShader(false);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
@@ -248,12 +541,15 @@ public class SpookyDash : MonoBehaviour
     private IEnumerator PhaseGraceThenRestore()
     {
         yield return new WaitForSeconds(_phaseGraceAfterDash);
+
         SetPhase(false);
-        SetCameraPhaseIgnore(false);
         _phaseGraceRoutine = null;
 
-        // Swap back to normal
-        HideSpookyModel();
+        SetCameraPhaseIgnore(false);
+
+        OnSpookyWindowEnded?.Invoke(); // fully over after grace
+        _spookyActiveThisDash = false;
+        _spookyAnimFired = true;
     }
 
     private void RefreshPlayerColliders()
@@ -293,197 +589,13 @@ public class SpookyDash : MonoBehaviour
         }
     }
 
-    private void SetCameraPhaseIgnore(bool on)
-    {
-        if (_playerCamera != null)
-        {
-            _playerCamera.SetCollisionMaskPhaseIgnore(on);
-        }
-    }
-
     // ─────────────────────────────────────────────────────────────────────────────
-    // Spooky model swap logic
-    private void ShowSpookyModel()
+    // Afterimage trail (only during early portion of the spooky window)
+    private IEnumerator SpawnTrailWhileWindowPortion(Func<bool> keepSpawning)
     {
-        if (_spookyModelPrefab == null)
+        while (keepSpawning != null && keepSpawning())
         {
-            if (_log) Debug.LogWarning("[SpookyDash] No spooky model prefab assigned—visual swap skipped.");
-            return;
-        }
-
-        // Cache normal renderers if needed
-        if (_normalRenderers == null || _normalRenderers.Length == 0)
-        {
-            _normalRenderers = _normalVisualRoot
-                ? _normalVisualRoot.GetComponentsInChildren<Renderer>(true)
-                : GetComponentsInChildren<Renderer>(true);
-        }
-
-        // Spawn or reuse spooky instance
-        if (_spookyInstance == null)
-        {
-            Transform parent = _spookySpawnParent != null ? _spookySpawnParent :
-                               (_normalVisualRoot != null ? _normalVisualRoot.parent : transform);
-
-            _spookyInstance = Instantiate(_spookyModelPrefab, parent ? parent : transform);
-            MatchTransformToNormal(_spookyInstance.transform);
-            _spookyAnimator = _spookyInstance.GetComponentInChildren<Animator>();
-            _spookyRenderers = _spookyInstance.GetComponentsInChildren<Renderer>(true);
-
-            // Start hidden until we crossfade
-            SetRenderersAlpha(_spookyRenderers, 0f);
-            SetRenderersEnabled(_spookyRenderers, true);
-        }
-        else
-        {
-            MatchTransformToNormal(_spookyInstance.transform);
-            if (_spookyRenderers == null || _spookyRenderers.Length == 0)
-                _spookyRenderers = _spookyInstance.GetComponentsInChildren<Renderer>(true);
-
-            SetRenderersEnabled(_spookyRenderers, true);
-        }
-
-        // Hide normal + show spooky (optionally via alpha crossfade)
-        if (_useModelCrossfade && _modelCrossfadeDuration > 0f)
-            StartCoroutine(CrossfadeRenderers(_normalRenderers, _spookyRenderers, _modelCrossfadeDuration));
-        else
-        {
-            SetRenderersEnabled(_normalRenderers, false);
-            SetRenderersEnabled(_spookyRenderers, true);
-        }
-
-        // Play spooky dash state
-        if (_spookyAnimator != null && !string.IsNullOrEmpty(_spookyDashStateName))
-        {
-            _spookyAnimator.Update(0f); // ensure animator is initialized
-            _spookyAnimator.CrossFadeInFixedTime(_spookyDashStateName, 0.02f, _spookyDashLayer, 0f);
-        }
-    }
-
-    private void HideSpookyModel()
-    {
-        if (_spookyInstance == null)
-        {
-            // Just ensure normals are visible
-            SetRenderersEnabled(_normalRenderers, true);
-            return;
-        }
-
-        // Crossfade back to normal or snap
-        if (_useModelCrossfade && _modelCrossfadeDuration > 0f)
-            StartCoroutine(CrossfadeRenderers(_spookyRenderers, _normalRenderers, _modelCrossfadeDuration, thenDisableA:true));
-        else
-        {
-            SetRenderersEnabled(_spookyRenderers, false);
-            SetRenderersEnabled(_normalRenderers, true);
-        }
-    }
-
-    private void HideSpookyInstanceImmediate()
-    {
-        if (_spookyRenderers != null && _spookyRenderers.Length > 0)
-            SetRenderersEnabled(_spookyRenderers, false);
-    }
-
-    private void MatchTransformToNormal(Transform ghost)
-    {
-        if (_normalVisualRoot == null || ghost == null) return;
-        ghost.position = _normalVisualRoot.position;
-        ghost.rotation = _normalVisualRoot.rotation;
-        ghost.localScale = _normalVisualRoot.lossyScale; // lossy; parent to same parent for exact match
-    }
-
-    private void SetRenderersEnabled(Renderer[] rends, bool on)
-    {
-        if (rends == null) return;
-        for (int i = 0; i < rends.Length; i++)
-            if (rends[i]) rends[i].enabled = on;
-    }
-
-    // Alpha helper: only affects materials that have _BaseColor/_Color. Leaves others alone (they'll pop).
-    private void SetRenderersAlpha(Renderer[] rends, float a)
-    {
-        if (rends == null) return;
-        for (int i = 0; i < rends.Length; i++)
-        {
-            var r = rends[i];
-            if (!r) continue;
-
-            var mpb = new MaterialPropertyBlock();
-            r.GetPropertyBlock(mpb);
-
-            bool setAny = false;
-            if (r.sharedMaterial != null && r.sharedMaterial.HasProperty(_BaseColorID))
-            {
-                var c = r.sharedMaterial.GetColor(_BaseColorID);
-                c.a = a;
-                mpb.SetColor(_BaseColorID, c);
-                setAny = true;
-            }
-            else if (r.sharedMaterial != null && r.sharedMaterial.HasProperty(_ColorID))
-            {
-                var c = r.sharedMaterial.GetColor(_ColorID);
-                c.a = a;
-                mpb.SetColor(_ColorID, c);
-                setAny = true;
-            }
-
-            if (setAny) r.SetPropertyBlock(mpb);
-        }
-    }
-
-    private IEnumerator CrossfadeRenderers(Renderer[] fromA, Renderer[] toB, float duration, bool thenDisableA = false)
-    {
-        float t = 0f;
-
-        // Ensure both groups are enabled while fading
-        SetRenderersEnabled(fromA, true);
-        SetRenderersEnabled(toB, true);
-
-        // Initialize: A=1, B=0
-        SetRenderersAlpha(fromA, 1f);
-        SetRenderersAlpha(toB, 0f);
-
-        while (t < duration)
-        {
-            t += Time.deltaTime;
-            float n = Mathf.Clamp01(t / duration);
-            float aA = 1f - n;
-            float aB = n;
-
-            SetRenderersAlpha(fromA, aA);
-            SetRenderersAlpha(toB, aB);
-            yield return null;
-        }
-
-        // Finalize
-        SetRenderersAlpha(fromA, 0f);
-        SetRenderersAlpha(toB, 1f);
-
-        if (thenDisableA)
-            SetRenderersEnabled(fromA, false);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────
-    // Afterimage trail
-    private void CacheRenderers()
-    {
-        _skinned = GetComponentsInChildren<SkinnedMeshRenderer>(true);
-        _staticMeshes = GetComponentsInChildren<MeshRenderer>(true);
-
-        // Also cache normal visual renderers for swap
-        if (_normalVisualRoot != null)
-            _normalRenderers = _normalVisualRoot.GetComponentsInChildren<Renderer>(true);
-        else
-            _normalRenderers = GetComponentsInChildren<Renderer>(true);
-    }
-
-    private IEnumerator SpawnTrailWhileDashing()
-    {
-        // Only run while the *dash is active* (spooky dash path)
-        while (_playerDash != null && _playerDash.IsDashing() && _spookyDashActive)
-        {
-            SpawnOneGhostFrame(1f); // full strength while dashing
+            SpawnOneGhostFrame(1f);
             yield return new WaitForSeconds(_spawnInterval);
         }
         _trailRoutine = null;
@@ -497,10 +609,8 @@ public class SpookyDash : MonoBehaviour
             float n = Mathf.Clamp01(t / _postDashLinger);
             float alphaMul = Mathf.Clamp01(_postDashAlphaOverTime.Evaluate(n));
 
-            // spawn a fainter ghost
             SpawnOneGhostFrame(alphaMul);
 
-            // progressively slow the spawn rate
             float interval = _spawnInterval * Mathf.Lerp(1f, Mathf.Max(1f, _postDashSpawnIntervalScale), n);
             yield return new WaitForSeconds(interval);
 
@@ -511,20 +621,12 @@ public class SpookyDash : MonoBehaviour
 
     private void StopTrailImmediate()
     {
-        if (_trailRoutine != null)
-        {
-            StopCoroutine(_trailRoutine);
-            _trailRoutine = null;
-        }
+        if (_trailRoutine != null) { StopCoroutine(_trailRoutine); _trailRoutine = null; }
     }
 
     private void StopLingerImmediate()
     {
-        if (_lingerRoutine != null)
-        {
-            StopCoroutine(_lingerRoutine);
-            _lingerRoutine = null;
-        }
+        if (_lingerRoutine != null) { StopCoroutine(_lingerRoutine); _lingerRoutine = null; }
     }
 
     private void SpawnOneGhostFrame(float globalAlphaMul)
@@ -535,16 +637,13 @@ public class SpookyDash : MonoBehaviour
             (_staticMeshes == null || _staticMeshes.Length == 0))
             CacheRenderers();
 
-        // pick correct color property and read material color INCLUDING alpha
         int colorProp = _afterimageMaterial.HasProperty(_BaseColorID) ? _BaseColorID : _ColorID;
         Color baseCol = _afterimageMaterial.HasProperty(colorProp)
             ? _afterimageMaterial.GetColor(colorProp)
             : (_afterimageMaterial.HasProperty(_ColorID) ? _afterimageMaterial.color : Color.white);
 
-        // apply global alpha multiplier for linger
         baseCol.a *= Mathf.Clamp01(globalAlphaMul);
 
-        // Skinned meshes
         if (_skinned != null)
         {
             foreach (var s in _skinned)
@@ -560,7 +659,6 @@ public class SpookyDash : MonoBehaviour
             }
         }
 
-        // Static meshes
         if (_staticMeshes != null)
         {
             foreach (var mr in _staticMeshes)
@@ -583,24 +681,27 @@ public class SpookyDash : MonoBehaviour
 
         if (_posJitter > 0f)
             go.transform.position += new Vector3(
-                Random.Range(-_posJitter, _posJitter),
-                Random.Range(-_posJitter, _posJitter),
-                Random.Range(-_posJitter, _posJitter)
+                UnityEngine.Random.Range(-_posJitter, _posJitter),
+                UnityEngine.Random.Range(-_posJitter, _posJitter),
+                UnityEngine.Random.Range(-_posJitter, _posJitter)
             );
         if (_scaleJitter > 0f)
         {
-            float j = 1f + Random.Range(-_scaleJitter, _scaleJitter);
+            float j = 1f + UnityEngine.Random.Range(-_scaleJitter, _scaleJitter);
             go.transform.localScale *= j;
         }
 
         var mf = go.AddComponent<MeshFilter>();
         var mr = go.AddComponent<MeshRenderer>();
         mf.sharedMesh = mesh;
-        mr.sharedMaterial = _afterimageMaterial; // same material, we’ll override color via MPB
+        mr.sharedMaterial = _afterimageMaterial;
         go.layer = source.gameObject.layer;
 
         var fade = go.AddComponent<GhostFade>();
-        fade.Initialize(baseCol, colorPropId, _ghostLifetime, _alphaOverLife, mr, mf);
+        fade.Initialize(
+            baseCol, colorPropId, _ghostLifetime, _alphaOverLife,
+            mr, mf, _preserveColorWhenFading, Mathf.Max(1f, _colorBoostClamp)
+        );
 
         _liveGhosts.Add(fade);
         fade.onDestroyed += () => _liveGhosts.Remove(fade);
@@ -613,12 +714,12 @@ public class SpookyDash : MonoBehaviour
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // Per-ghost fade (alpha only). Uses detected color property.
+    // Per-ghost fade
     private class GhostFade : MonoBehaviour
     {
         public System.Action onDestroyed;
 
-        private Color _baseColor = Color.white; // includes material alpha (and linger alpha)
+        private Color _baseColor = Color.white;
         private int _colorPropId = 0;
         private float _life;
         private float _t;
@@ -627,8 +728,12 @@ public class SpookyDash : MonoBehaviour
         private MeshRenderer _mr;
         private MeshFilter _mf;
 
-        public void Initialize(Color baseColor, int colorPropId, float life, AnimationCurve curve,
-                               MeshRenderer mr, MeshFilter mf)
+        private bool _preserveColor;
+        private float _boostClamp;
+
+        public void Initialize(
+            Color baseColor, int colorPropId, float life, AnimationCurve curve,
+            MeshRenderer mr, MeshFilter mf, bool preserveColor, float boostClamp)
         {
             _baseColor = baseColor;
             _colorPropId = colorPropId;
@@ -637,6 +742,9 @@ public class SpookyDash : MonoBehaviour
             _mr = mr;
             _mf = mf;
             _mpb = new MaterialPropertyBlock();
+
+            _preserveColor = preserveColor;
+            _boostClamp = Mathf.Max(1f, boostClamp);
         }
 
         public void KillNow()
@@ -651,9 +759,19 @@ public class SpookyDash : MonoBehaviour
             float n = Mathf.Clamp01(_t / _life);
             float curveAlpha = Mathf.Clamp01(_curve.Evaluate(n));
 
-            // Keep chroma; only scale alpha (don’t desaturate)
+            float newA = _baseColor.a * curveAlpha;
+
             Color c = _baseColor;
-            c.a = _baseColor.a * curveAlpha;
+
+            if (_preserveColor && newA > 0.0001f && _baseColor.a > 0.0001f)
+            {
+                float k = Mathf.Clamp(_baseColor.a / newA, 1f, _boostClamp);
+                c.r = Mathf.Clamp01(c.r * k);
+                c.g = Mathf.Clamp01(c.g * k);
+                c.b = Mathf.Clamp01(c.b * k);
+            }
+
+            c.a = newA;
 
             if (_mr != null)
             {
@@ -672,13 +790,14 @@ public class SpookyDash : MonoBehaviour
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // Public helpers (optional UI/debug)
-    public bool IsSpookyReady() => _spookyReady;
-    public float GetSpecialCooldownRemaining() => _cooldownRemaining;
+    // PUBLIC HELPERS
+    public bool IsCurrentlySpookyDashing()
+    {
+        bool withinWindow = _spookyActiveThisDash && Time.time < _spookyEndTime;
+        bool inGrace      = _phaseGraceRoutine != null;
+        return _spookyActiveThisDash && (withinWindow || inGrace);
+    }
 
-    // True while the current dash is the spooky one OR while we're still in phase-grace.
-    public bool IsCurrentlySpookyDashing() => _spookyDashActive || _isPhasing;
-
-    // Expose raw phase state (true during dash phasing AND the grace window).
-    public bool IsPhasing() => _isPhasing;
+    public bool IsPhasing => _isPhasing;
+    public bool IsInPhaseGrace => (_phaseGraceRoutine != null) && !_wasDashingLastFrame;
 }

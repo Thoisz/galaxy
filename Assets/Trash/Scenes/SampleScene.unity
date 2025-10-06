@@ -4240,18 +4240,10 @@ MonoBehaviour:
   _playerCamera: {fileID: 1019612833}
   _playerPhaseLayerName: PlayerPhase
   _phaseGraceAfterDash: 0.12
-  _specialCooldown: 1.5
-  _spookyModelPrefab: {fileID: 0}
-  _spookySpawnParent: {fileID: 0}
-  _spookyDashStateName: SpookyDash
-  _spookyDashLayer: 0
-  _normalVisualRoot: {fileID: 0}
-  _useModelCrossfade: 1
-  _modelCrossfadeDuration: 0.12
   _afterimageEnabled: 1
   _afterimageMaterial: {fileID: 2100000, guid: c20ce36d862562449ae1e15141da2a37, type: 2}
   _spawnInterval: 0.08
-  _ghostLifetime: 0.4
+  _ghostLifetime: 0.3
   _alphaOverLife:
     serializedVersion: 2
     m_Curve:
@@ -4278,6 +4270,9 @@ MonoBehaviour:
     m_RotationOrder: 4
   _scaleJitter: 0.04
   _posJitter: 0.02
+  _trailFirstPortion: 0.7
+  _preserveColorWhenFading: 1
+  _colorBoostClamp: 1.75
   _postDashLinger: 0
   _postDashAlphaOverTime:
     serializedVersion: 2
@@ -4304,7 +4299,58 @@ MonoBehaviour:
     m_PostInfinity: 2
     m_RotationOrder: 4
   _postDashSpawnIntervalScale: 0.5
-  _log: 1
+  _transparencyEnabled: 1
+  _transparencyAlpha: 0.2
+  _opaqueShader: {fileID: -6465566751694194690, guid: a9216c67099b04a4e9fc261f0d1101e1, type: 3}
+  _transparentShader: {fileID: -6465566751694194690, guid: 7a5f410e4f426a041b36c668e0e77a04, type: 3}
+  _opacityPropertyName: _Opacity
+  _fadeInDuration: 0
+  _fadeOutDuration: 0
+  _fadeBackStartNormalized: 0.8
+  _dashDurationHint: 0.35
+  _spookyDurationMultiplier: 1
+  _cooldownSeconds: 3
+  _bubbleFXPrefab: {fileID: 2030903556517278633, guid: ce264ba81a31e834e8550b7cf69fdaa6, type: 3}
+  _hipBone: {fileID: 1076402318}
+  _log: 0
+--- !u!114 &636263584
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 636263551}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d13cf71212b6c41468f6da8f0c33dcde, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  animator: {fileID: 636263557}
+  playerDash: {fileID: 636263582}
+  spookyDash: {fileID: 636263583}
+  overridesToApply:
+  - baseClip: {fileID: 7400000, guid: 76142df57252b38499bf166ca8d42a63, type: 2}
+    spookyClip: {fileID: 7400000, guid: 9ae89ebc557705446b74b00ed3b3b65e, type: 2}
+  - baseClip: {fileID: 7400000, guid: f08bd2200f330724a88da02277c9b53d, type: 2}
+    spookyClip: {fileID: 7400000, guid: 9ae89ebc557705446b74b00ed3b3b65e, type: 2}
+  - baseClip: {fileID: 7400000, guid: 9a454652ca0d8244c93a0b4fcc683ae6, type: 2}
+    spookyClip: {fileID: 7400000, guid: b1ca7e9d31dbbe84e870b2f9ef4b62ed, type: 2}
+  - baseClip: {fileID: 7400000, guid: bdf2f31437a03454da6b6ebc4f728718, type: 2}
+    spookyClip: {fileID: 7400000, guid: b1ca7e9d31dbbe84e870b2f9ef4b62ed, type: 2}
+  - baseClip: {fileID: 7400000, guid: d9b47ca5e43f2704983ac49aed5921b6, type: 2}
+    spookyClip: {fileID: 7400000, guid: 3994ff9bb75dbf243b01e8194780bdab, type: 2}
+  - baseClip: {fileID: 7400000, guid: 495dc4b81ef67ab44aa23e58a0943964, type: 2}
+    spookyClip: {fileID: 7400000, guid: 3994ff9bb75dbf243b01e8194780bdab, type: 2}
+  includePhaseGrace: 0
+  postDashRestoreTimeout: 0.05
+  controlAnimatorSpeed: 1
+  spookySpeedMultiplier: 1
+  speedBlendOutTime: 0.14
+  preExitEaseEnabled: 0
+  preExitEaseWindow: 0.3
+  preExitLandingMultiplier: 1.1
+  softLandingEnabled: 0
+  softLandingCrossfade: 0.18
 --- !u!1 &640391299
 GameObject:
   m_ObjectHideFlags: 0
@@ -8177,7 +8223,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 285, y: 15}
+  m_AnchoredPosition: {x: 78, y: -0}
   m_SizeDelta: {x: 197.07, y: 18}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1185469106
@@ -8236,7 +8282,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 0
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 2
   m_VerticalAlignment: 256
   m_textAlignment: 65535
   m_characterSpacing: 0
@@ -9038,7 +9084,7 @@ MonoBehaviour:
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 0
-  m_HorizontalAlignment: 1
+  m_HorizontalAlignment: 2
   m_VerticalAlignment: 256
   m_textAlignment: 65535
   m_characterSpacing: 0
@@ -9097,7 +9143,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 285, y: 10}
+  m_AnchoredPosition: {x: 66, y: 0}
   m_SizeDelta: {x: 197.07, y: 18}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &1343659148 stripped
@@ -16773,6 +16819,10 @@ PrefabInstance:
       propertyPath: m_Layer
       value: 8
       objectReference: {fileID: 0}
+    - target: {fileID: 5606781798658855735, guid: f39991892847afc45ba8bd01ad2057a7, type: 3}
+      propertyPath: m_Materials.Array.data[0]
+      value: 
+      objectReference: {fileID: 2100000, guid: aa53a6298d448b44193f6dbefa6a39dd, type: 2}
     - target: {fileID: 5993235408503163468, guid: f39991892847afc45ba8bd01ad2057a7, type: 3}
       propertyPath: m_Layer
       value: 8
@@ -16918,6 +16968,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 6755260014352961950, guid: f39991892847afc45ba8bd01ad2057a7, type: 3}
       insertIndex: 13
       addedObject: {fileID: 636263583}
+    - targetCorrespondingSourceObject: {fileID: 6755260014352961950, guid: f39991892847afc45ba8bd01ad2057a7, type: 3}
+      insertIndex: 14
+      addedObject: {fileID: 636263584}
   m_SourcePrefab: {fileID: 100100000, guid: f39991892847afc45ba8bd01ad2057a7, type: 3}
 --- !u!4 &4011516855350075843
 Transform:
@@ -17263,6 +17316,10 @@ PrefabInstance:
       propertyPath: m_LocalEulerAnglesHint.y
       value: -24.313
       objectReference: {fileID: 0}
+    - target: {fileID: -7775246830523122281, guid: 09df3aa9efb2983419d042d9bd905698, type: 3}
+      propertyPath: m_Materials.Array.data[0]
+      value: 
+      objectReference: {fileID: 2100000, guid: aa53a6298d448b44193f6dbefa6a39dd, type: 2}
     - target: {fileID: -7775246830523122281, guid: 09df3aa9efb2983419d042d9bd905698, type: 3}
       propertyPath: m_BlendShapeWeights.Array.size
       value: 1
