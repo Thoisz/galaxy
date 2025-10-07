@@ -44,12 +44,7 @@ public class SpookyDash : MonoBehaviour
     [Tooltip("Overall opacity while spooky window is early (0=invisible, 1=opaque).")]
     [SerializeField, Range(0f, 1f)] private float _transparencyAlpha = 0.4f;
 
-    [Tooltip("Shader used when NOT spooky (opaque). Drag the Shader asset here.")]
-    [SerializeField] private Shader _opaqueShader;
-
-    [Tooltip("Shader used WHILE spooky (transparent). Drag the Shader asset here.")]
-    [SerializeField] private Shader _transparentShader;
-
+    [Header("Single-Shader Opacity Control")]
     [Tooltip("Opacity property Reference name from your Shader Graph (include underscore).")]
     [SerializeField] private string _opacityPropertyName = "_Opacity";
     [SerializeField, Min(0f)] private float _fadeInDuration = 0.12f;
@@ -98,15 +93,16 @@ public class SpookyDash : MonoBehaviour
     // ── Track spawned ghosts
     private readonly List<GhostFade> _liveGhosts = new List<GhostFade>();
 
-    // ── Transparency / shader-swap state
+    // ── Transparency / material state
     private MaterialPropertyBlock _mpbTrans;
     private int _opacityID;
     private static readonly int _ColorID      = Shader.PropertyToID("_Color");
     private static readonly int _BaseColorID  = Shader.PropertyToID("_BaseColor");
-    private static readonly int _SurfaceID    = Shader.PropertyToID("_Surface");
-    private static readonly int _QueueCtrlID  = Shader.PropertyToID("_QueueControl");
-    private static readonly int _QueueOffID   = Shader.PropertyToID("_QueueOffset");
-    private static readonly int _ZWriteCtrlID = Shader.PropertyToID("_ZWriteControl");
+    private static readonly int _SurfaceID    = Shader.PropertyToID("_Surface");        // 0 Opaque, 1 Transparent
+    private static readonly int _QueueCtrlID  = Shader.PropertyToID("_QueueControl");   // 1 = override queue
+    private static readonly int _QueueOffID   = Shader.PropertyToID("_QueueOffset");    // 0/whatever
+    private static readonly int _ZWriteCtrlID = Shader.PropertyToID("_ZWriteControl");  // 2 = ForceOff (Shader Graph)
+    private static readonly string _KW_SURFACE_TRANSPARENT = "_SURFACE_TYPE_TRANSPARENT";
 
     private bool _materialsInstanced;
     private float _currentOpacity = 1f;
@@ -119,7 +115,7 @@ public class SpookyDash : MonoBehaviour
     private bool  _spookyActiveThisDash;          // accepted for this dash
     private bool  _spookySuppressedThisDash;      // denied due to cooldown
     private float _spookyEndTime;                 // end of spooky window (1.5×)
-    private bool  _spookyAnimFired;               // for external anim gating if you need it
+    private bool  _spookyAnimFired;
 
     // ── Cooldown
     private float _cooldownReadyTime = 0f;
@@ -154,9 +150,6 @@ public class SpookyDash : MonoBehaviour
 
         _mpbTrans  = new MaterialPropertyBlock();
         _opacityID = Shader.PropertyToID(_opacityPropertyName);
-
-        if (_opaqueShader == null)       Debug.LogWarning("[SpookyDash] Opaque shader not assigned.");
-        if (_transparentShader == null)  Debug.LogWarning("[SpookyDash] Transparent shader not assigned.");
     }
 
     private void OnEnable()
@@ -168,7 +161,8 @@ public class SpookyDash : MonoBehaviour
 
         _currentOpacity = 1f;
         _opacityVel = 0f;
-        RestoreOpacityAndShader();
+        RestoreOpacityOnly();
+        SetTransparentStateOnAll(false);
 
         SetCameraPhaseIgnore(false);
 
@@ -184,7 +178,9 @@ public class SpookyDash : MonoBehaviour
         StopTrailImmediate();
         StopLingerImmediate();
         KillAllGhostsImmediate();
-        RestoreOpacityAndShader();
+
+        RestoreOpacityOnly();
+        SetTransparentStateOnAll(false);
         SetCameraPhaseIgnore(false);
     }
 
@@ -290,26 +286,22 @@ public class SpookyDash : MonoBehaviour
     {
         if (_bubbleFXPrefab == null || _hipBone == null) return;
 
-        // Use prefab rotation exactly as-authored; world position at hip.
         ParticleSystem ps = Instantiate(_bubbleFXPrefab, _hipBone.position, _bubbleFXPrefab.transform.rotation);
-
-        // Ensure world simulation so it never inherits later movement
         var main = ps.main;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
-
         if (!ps.isPlaying) ps.Play();
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // Transparency logic
+    // Transparency logic (single shader)
     private void UpdateTransparencyBlock(bool spookyMainActive, bool spookyActiveInclGrace)
     {
         if (!_transparencyEnabled)
         {
             _currentOpacity = 1f;
             _opacityVel = 0f;
-            SwitchAllMaterialsShader(useTransparent: false);
-            RestoreOpacityToAll();
+            SetTransparentStateOnAll(false);
+            RestoreOpacityOnly();
             return;
         }
 
@@ -352,8 +344,8 @@ public class SpookyDash : MonoBehaviour
             _currentOpacity = Mathf.SmoothDamp(_currentOpacity, targetOpacity, ref _opacityVel, smoothTime);
         }
 
-        bool wantTransparentShader = _currentOpacity < 0.999f;
-        SwitchAllMaterialsShader(useTransparent: wantTransparentShader);
+        bool wantTransparent = _currentOpacity < 0.999f;
+        SetTransparentStateOnAll(wantTransparent);
         ApplyOpacityToAll(_currentOpacity);
     }
 
@@ -402,7 +394,7 @@ public class SpookyDash : MonoBehaviour
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // Shader/material helpers
+    // Renderer/material helpers (single shader)
     private void CacheRenderers()
     {
         _skinned = GetComponentsInChildren<SkinnedMeshRenderer>(true);
@@ -421,12 +413,25 @@ public class SpookyDash : MonoBehaviour
         _materialsInstanced = true;
     }
 
-    private void SwitchAllMaterialsShader(bool useTransparent)
+    /// <summary>Flip **the same shader** between opaque/transparent via properties & keyword.</summary>
+    private void SetTransparentStateOnAll(bool transparent)
     {
-        Shader target = useTransparent ? _transparentShader : _opaqueShader;
-        if (!target) return;
-
         EnsureInstancedMaterials();
+
+        void Apply(Material m)
+        {
+            if (!m) return;
+
+            // Shader Graph common toggles
+            if (m.HasProperty(_SurfaceID))    m.SetFloat(_SurfaceID, transparent ? 1f : 0f);
+            if (m.HasProperty(_ZWriteCtrlID)) m.SetFloat(_ZWriteCtrlID, transparent ? 2f : 0f);
+            if (m.HasProperty(_QueueCtrlID))  m.SetFloat(_QueueCtrlID, 1f);
+            if (m.HasProperty(_QueueOffID))   m.SetFloat(_QueueOffID, 0f);
+            m.renderQueue = transparent ? 3000 : 2000;
+
+            if (transparent) { m.EnableKeyword(_KW_SURFACE_TRANSPARENT); m.DisableKeyword("_ALPHATEST_ON"); }
+            else             { m.DisableKeyword(_KW_SURFACE_TRANSPARENT); }
+        }
 
         if (_skinned != null)
         {
@@ -434,12 +439,7 @@ public class SpookyDash : MonoBehaviour
             {
                 if (!r) continue;
                 var mats = r.materials;
-                for (int i = 0; i < mats.Length; i++)
-                {
-                    var m = mats[i]; if (!m) continue;
-                    if (m.shader != target) m.shader = target;
-                    ConfigureShaderGraphSurface(m, useTransparent);
-                }
+                for (int i = 0; i < mats.Length; i++) Apply(mats[i]);
             }
         }
 
@@ -449,26 +449,9 @@ public class SpookyDash : MonoBehaviour
             {
                 if (!r || r is SkinnedMeshRenderer) continue;
                 var mats = r.materials;
-                for (int i = 0; i < mats.Length; i++)
-                {
-                    var m = mats[i]; if (!m) continue;
-                    if (m.shader != target) m.shader = target;
-                    ConfigureShaderGraphSurface(m, useTransparent);
-                }
+                for (int i = 0; i < mats.Length; i++) Apply(mats[i]);
             }
         }
-    }
-
-    private void ConfigureShaderGraphSurface(Material m, bool transparent)
-    {
-        if (m.HasProperty(_SurfaceID))    m.SetFloat(_SurfaceID, transparent ? 1f : 0f);
-        if (m.HasProperty(_ZWriteCtrlID)) m.SetFloat(_ZWriteCtrlID, transparent ? 2f : 0f);
-        if (m.HasProperty(_QueueCtrlID))  m.SetFloat(_QueueCtrlID, 1f);
-        if (m.HasProperty(_QueueOffID))   m.SetFloat(_QueueOffID, 0f);
-        m.renderQueue = transparent ? 3000 : 2000;
-
-        if (transparent) { m.EnableKeyword("_SURFACE_TYPE_TRANSPARENT"); m.DisableKeyword("_ALPHATEST_ON"); }
-        else             { m.DisableKeyword("_SURFACE_TYPE_TRANSPARENT"); }
     }
 
     private void SetCameraPhaseIgnore(bool on)
@@ -516,7 +499,7 @@ public class SpookyDash : MonoBehaviour
         }
     }
 
-    private void RestoreOpacityToAll()
+    private void RestoreOpacityOnly()
     {
         if (_skinned != null) foreach (var r in _skinned) if (r) r.SetPropertyBlock(null);
         if (_staticMeshes != null) foreach (var r in _staticMeshes) if (r && !(r is SkinnedMeshRenderer)) r.SetPropertyBlock(null);
@@ -528,12 +511,6 @@ public class SpookyDash : MonoBehaviour
         if (_staticMeshes != null)
             foreach (var r in _staticMeshes)
                 foreach (var m in r.materials) if (m && m.HasProperty(_opacityID)) m.SetFloat(_opacityID, 1f);
-    }
-
-    private void RestoreOpacityAndShader()
-    {
-        RestoreOpacityToAll();
-        SwitchAllMaterialsShader(false);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
@@ -775,9 +752,10 @@ public class SpookyDash : MonoBehaviour
 
             if (_mr != null)
             {
-                _mr.GetPropertyBlock(_mpb);
+                var mpb = _mpb ??= new MaterialPropertyBlock();
+                _mr.GetPropertyBlock(mpb);
                 _mpb.SetColor(_colorPropId, c);
-                _mr.SetPropertyBlock(_mpb);
+                _mr.SetPropertyBlock(mpb);
             }
 
             if (_t >= _life)
