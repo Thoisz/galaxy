@@ -62,62 +62,62 @@ public class GroundbreakFXRoot : MonoBehaviour
     /// This also tries to inherit the hit material.
     /// </summary>
     public void ConfigureFromContact(Vector3 origin, Vector3 up)
-{
-    AutoBindIfNeeded();
-
-    // 1) Find ground directly beneath the given origin
-    Vector3 start = origin + up * rayStartUpOffset;
-    Vector3 dir   = -up;
-
-    if (Physics.Raycast(start, dir, out RaycastHit hit, rayDownDistance, groundMask, QueryTriggerInteraction.Ignore))
     {
-        // Place the FX on the contact point and align its up to the ground normal
-        transform.position = hit.point;
-        transform.rotation = Quaternion.FromToRotation(Vector3.up, hit.normal);
+        AutoBindIfNeeded();
 
-        if (debugLogs)
-        {
-            Debug.DrawLine(start, hit.point, Color.green, 1.5f);
-            Debug.Log($"[GroundbreakFXRoot] Hit '{hit.collider.name}' at {hit.point}", this);
-        }
+        // 1) Find ground directly beneath the given origin
+        Vector3 start = origin + up * rayStartUpOffset;
+        Vector3 dir   = -up;
 
-        // 2) Inherit the ground's material for the slab ring (optional)
-        if (inheritGroundMaterial && slabRenderer != null)
+        if (Physics.Raycast(start, dir, out RaycastHit hit, rayDownDistance, groundMask, QueryTriggerInteraction.Ignore))
         {
-            var srcMat = TryGetGroundMaterial(hit);
-            if (srcMat != null)
+            // Place the FX on the contact point and align its up to the ground normal
+            transform.position = hit.point;
+            transform.rotation = Quaternion.FromToRotation(Vector3.up, hit.normal);
+
+            if (debugLogs)
             {
-                ApplyMaterialToSlabs(srcMat);
+                Debug.DrawLine(start, hit.point, Color.green, 1.5f);
+                Debug.Log($"[GroundbreakFXRoot] Hit '{hit.collider.name}' at {hit.point}", this);
             }
-            else if (debugLogs)
+
+            // 2) Inherit the ground's material for the slab ring (optional)
+            if (inheritGroundMaterial && slabRenderer != null)
             {
-                Debug.LogWarning("[GroundbreakFXRoot] Could not find a ground material to inherit.", this);
+                var srcMat = TryGetGroundMaterial(hit);
+                if (srcMat != null)
+                {
+                    ApplyMaterialToSlabs(srcMat);
+                }
+                else if (debugLogs)
+                {
+                    Debug.LogWarning("[GroundbreakFXRoot] Could not find a ground material to inherit.", this);
+                }
+            }
+
+            // 3) Sample a representative color from the ground and tint rubble with it (optional)
+            Color groundCol;
+            if (TrySampleGroundColor(out groundCol))
+            {
+                ApplyColorToRubble(groundCol);
+                if (debugLogs) Debug.Log($"[GroundbreakFXRoot] Rubble color set to {groundCol}", this);
+            }
+        }
+        else
+        {
+            // No ground below; keep current transform but log/debug draw
+            if (debugLogs)
+            {
+                Debug.DrawRay(start, dir * rayDownDistance, Color.red, 1.5f);
+                Debug.LogWarning("[GroundbreakFXRoot] No ground hit. Using current slab material/transform.", this);
             }
         }
 
-        // 3) Sample a representative color from the ground and tint rubble with it (optional)
-        Color groundCol;
-        if (TrySampleGroundColor(out groundCol))
-        {
-            ApplyColorToRubble(groundCol);
-            if (debugLogs) Debug.Log($"[GroundbreakFXRoot] Rubble color set to {groundCol}", this);
-        }
+        // 4) Kick off the visual effects
+        if (slabFx != null) slabFx.Play();
+        foreach (var ps in extraParticles)
+            if (ps) ps.Play(true);
     }
-    else
-    {
-        // No ground below; keep current transform but log/debug draw
-        if (debugLogs)
-        {
-            Debug.DrawRay(start, dir * rayDownDistance, Color.red, 1.5f);
-            Debug.LogWarning("[GroundbreakFXRoot] No ground hit. Using current slab material/transform.", this);
-        }
-    }
-
-    // 4) Kick off the visual effects
-    if (slabFx != null) slabFx.Play();
-    foreach (var ps in extraParticles)
-        if (ps) ps.Play(true);
-}
 
     // ─────────────────────────── helpers ───────────────────────────
 
@@ -158,51 +158,51 @@ public class GroundbreakFXRoot : MonoBehaviour
     }
 
     void ApplyMaterialToSlabs(Material src)
-{
-    if (slabRenderer == null || src == null) return;
-
-    // Clone if we need a transparent URP Lit for fading.
-    Material toAssign = src;
-    bool isURPLit = src.shader != null && src.shader.name.Contains("Universal Render Pipeline/Lit");
-    if (forceTransparentForURP && isURPLit)
     {
-        toAssign = new Material(src) { name = src.name + " (FX Clone)" };
-        ForceURPLitTransparent(toAssign);
-    }
+        if (slabRenderer == null || src == null) return;
 
-    // Preferred path: let the FX script handle instance + transparency + MPB refresh
-    if (slabFx != null)
-    {
-        slabFx.ApplyMaterial(toAssign);
-        if (debugLogs)
-            Debug.Log($"[GroundbreakFXRoot] Routed ground material '{toAssign.name}' via SlabRingSimpleFX.ApplyMaterial().", this);
-        return;
-    }
+        // Clone if we need a transparent URP Lit for fading.
+        Material toAssign = src;
+        bool isURPLit = src.shader != null && src.shader.name.Contains("Universal Render Pipeline/Lit");
+        if (forceTransparentForURP && isURPLit)
+        {
+            toAssign = new Material(src) { name = src.name + " (FX Clone)" };
+            ForceURPLitTransparent(toAssign);
+        }
 
-    // Fallback: assign directly on the renderer…
-    var mats = slabRenderer.materials; // instances
-    if (mats == null || mats.Length == 0) return;
+        // Preferred path: let the FX script handle instance + transparency + MPB refresh
+        if (slabFx != null)
+        {
+            slabFx.ApplyMaterial(toAssign);
+            if (debugLogs)
+                Debug.Log($"[GroundbreakFXRoot] Routed ground material '{toAssign.name}' via SlabRingSimpleFX.ApplyMaterial().", this);
+            return;
+        }
 
-    if (slabMaterialIndex < 0)
-    {
-        for (int i = 0; i < mats.Length; i++) mats[i] = toAssign;
-    }
-    else if (slabMaterialIndex < mats.Length)
-    {
-        mats[slabMaterialIndex] = toAssign;
-    }
-    slabRenderer.materials = mats;
+        // Fallback: assign directly on the renderer…
+        var mats = slabRenderer.materials; // instances
+        if (mats == null || mats.Length == 0) return;
 
-    // …and clear ALL property blocks so old _BaseColor MPB tints don’t override the new material
-    slabRenderer.SetPropertyBlock(null);
+        if (slabMaterialIndex < 0)
+        {
+            for (int i = 0; i < mats.Length; i++) mats[i] = toAssign;
+        }
+        else if (slabMaterialIndex < mats.Length)
+        {
+            mats[slabMaterialIndex] = toAssign;
+        }
+        slabRenderer.materials = mats;
+
+        // …and clear ALL property blocks so old _BaseColor MPB tints don’t override the new material
+        slabRenderer.SetPropertyBlock(null);
 #if UNITY_2021_2_OR_NEWER
-    for (int s = 1; s < slabRenderer.sharedMaterials.Length; s++)
-        slabRenderer.SetPropertyBlock(null, s);
+        for (int s = 1; s < slabRenderer.sharedMaterials.Length; s++)
+            slabRenderer.SetPropertyBlock(null, s);
 #endif
 
-    if (debugLogs)
-        Debug.Log($"[GroundbreakFXRoot] Applied '{toAssign.name}' directly to slabRenderer (fallback path).", this);
-}
+        if (debugLogs)
+            Debug.Log($"[GroundbreakFXRoot] Applied '{toAssign.name}' directly to slabRenderer (fallback path).", this);
+    }
 
     private static bool IsURPLit(Material m)
     {
@@ -229,171 +229,152 @@ public class GroundbreakFXRoot : MonoBehaviour
     }
 
     // Try to get a representative color from the ground under this FX root.
-// Prefers material color (_BaseColor/_Color/_TintColor). If there is a base/diffuse texture
-// AND we can get UVs, we sample it too and multiply by the material color.
-// Works with MeshRenderers and Terrain (readable splat/terrain layer texture not required for the color,
-// we’ll just use the layer’s diffuse texture sample if available).
-bool TrySampleGroundColor(out Color result)
-{
-    result = Color.white;
-
-    // Cast straight down from our FX root to re-acquire a fresh hit (in case ConfigureFromContact moved us)
-    Vector3 up = transform.up;               // already aligned to ground normal by ConfigureFromContact
-    Vector3 start = transform.position + up * 0.1f;
-    Vector3 dir = -up;
-
-    if (!Physics.Raycast(start, dir, out RaycastHit hit, rayDownDistance, groundMask, QueryTriggerInteraction.Ignore))
-        return false;
-
-    // 1) Terrain
-    var terrain = hit.collider.GetComponentInParent<Terrain>();
-    if (terrain != null && terrain.terrainData != null)
+    // Prefers material color; if there’s a base/diffuse texture and UVs, samples it too.
+    bool TrySampleGroundColor(out Color result)
     {
-        // Pick dominant layer and combine its diffuse texture sample with URP/Lit base color if present
-        var td = terrain.terrainData;
-        Vector3 local = hit.point - terrain.transform.position;
-        float u = Mathf.InverseLerp(0f, td.size.x, local.x);
-        float v = Mathf.InverseLerp(0f, td.size.z, local.z);
+        result = Color.white;
 
-        // Find dominant layer index (no need to read full splat if you don’t want; we can just grab the first layer)
-        // But we’ll do a tiny 1x1 sample for correctness:
-        int sx = Mathf.Clamp(Mathf.RoundToInt(u * (td.alphamapWidth  - 1)), 0, td.alphamapWidth  - 1);
-        int sy = Mathf.Clamp(Mathf.RoundToInt(v * (td.alphamapHeight - 1)), 0, td.alphamapHeight - 1);
-        float[,,] alpha = td.GetAlphamaps(sx, sy, 1, 1);
+        // Cast straight down from our FX root to re-acquire a fresh hit (in case ConfigureFromContact moved us)
+        Vector3 up = transform.up;
+        Vector3 start = transform.position + up * 0.1f;
+        Vector3 dir = -up;
 
-        int best = 0; float bestW = 0f;
-        for (int l = 0; l < td.alphamapLayers; l++)
+        if (!Physics.Raycast(start, dir, out RaycastHit hit, rayDownDistance, groundMask, QueryTriggerInteraction.Ignore))
+            return false;
+
+        // 1) Terrain
+        var terrain = hit.collider.GetComponentInParent<Terrain>();
+        if (terrain != null && terrain.terrainData != null)
         {
-            float w = alpha[0,0,l];
-            if (w > bestW) { bestW = w; best = l; }
-        }
+            var td = terrain.terrainData;
+            Vector3 local = hit.point - terrain.transform.position;
+            float u = Mathf.InverseLerp(0f, td.size.x, local.x);
+            float v = Mathf.InverseLerp(0f, td.size.z, local.z);
 
-        var layers = td.terrainLayers;
-        if (layers != null && best >= 0 && best < layers.Length)
-        {
-            var layer = layers[best];
-            Color baseTint = Color.white;
+            int sx = Mathf.Clamp(Mathf.RoundToInt(u * (td.alphamapWidth  - 1)), 0, td.alphamapWidth  - 1);
+            int sy = Mathf.Clamp(Mathf.RoundToInt(v * (td.alphamapHeight - 1)), 0, td.alphamapHeight - 1);
+            float[,,] alpha = td.GetAlphamaps(sx, sy, 1, 1);
 
-            // Try to fetch a tint from the terrain’s material template (URP Lit often uses _BaseColor).
-            var tmat = terrain.materialTemplate;
-            if (tmat != null)
-                baseTint = ReadAnyColorProperty(tmat, baseTint);
-
-            // Try to sample the diffuse at this world UV (approximate)
-            Color texCol = Color.white;
-            if (layer.diffuseTexture != null)
+            int best = 0; float bestW = 0f;
+            for (int l = 0; l < td.alphamapLayers; l++)
             {
-                // Convert world position to tile UV
-                Vector2 tileSize = layer.tileSize; if (tileSize.x <= 0f) tileSize.x = 1f; if (tileSize.y <= 0f) tileSize.y = 1f;
-                Vector2 uvLayer = new Vector2(local.x / tileSize.x, local.z / tileSize.y) + layer.tileOffset;
-
-                // If the texture is readable, sample; otherwise just use white
-                var tex = layer.diffuseTexture as Texture2D;
-                if (tex != null && tex.isReadable)
-                    texCol = tex.GetPixelBilinear(Mathf.Repeat(uvLayer.x, 1f), Mathf.Repeat(uvLayer.y, 1f));
+                float w = alpha[0,0,l];
+                if (w > bestW) { bestW = w; best = l; }
             }
 
-            result = MultiplySRGB(baseTint, texCol);
-            return true;
-        }
-
-        // Fallback: use terrain material color if nothing else
-        if (terrain.materialTemplate != null)
-        {
-            result = ReadAnyColorProperty(terrain.materialTemplate, Color.white);
-            return true;
-        }
-
-        return false;
-    }
-
-    // 2) Mesh / Static objects
-    var rend = hit.collider.GetComponentInParent<Renderer>();
-    if (rend != null)
-    {
-        // Use element 0 as “representative”
-        var mat = rend.sharedMaterial;
-        if (mat != null)
-        {
-            Color matCol = ReadAnyColorProperty(mat, Color.white);
-
-            // If there’s a base/diffuse texture AND we have UVs, try sampling it (requires readable texture).
-            Color texCol = Color.white;
-            var tex = GetAnyBaseTexture(mat);
-            if (tex != null && hit.textureCoord != Vector2.zero) // textureCoord is valid for MeshCollider raycasts
+            var layers = td.terrainLayers;
+            if (layers != null && best >= 0 && best < layers.Length)
             {
-                var t2 = tex as Texture2D;
-                if (t2 != null && t2.isReadable)
+                var layer = layers[best];
+                Color baseTint = Color.white;
+
+                var tmat = terrain.materialTemplate;
+                if (tmat != null)
+                    baseTint = ReadAnyColorProperty(tmat, baseTint);
+
+                Color texCol = Color.white;
+                if (layer.diffuseTexture != null)
                 {
-                    texCol = t2.GetPixelBilinear(hit.textureCoord.x, hit.textureCoord.y);
+                    Vector2 tileSize = layer.tileSize; if (tileSize.x <= 0f) tileSize.x = 1f; if (tileSize.y <= 0f) tileSize.y = 1f;
+                    Vector2 uvLayer = new Vector2(local.x / tileSize.x, local.z / tileSize.y) + layer.tileOffset;
+
+                    var tex = layer.diffuseTexture as Texture2D;
+                    if (tex != null && tex.isReadable)
+                        texCol = tex.GetPixelBilinear(Mathf.Repeat(uvLayer.x, 1f), Mathf.Repeat(uvLayer.y, 1f));
                 }
+
+                result = MultiplySRGB(baseTint, texCol);
+                return true;
             }
 
-            result = MultiplySRGB(matCol, texCol);
-            return true;
+            if (terrain.materialTemplate != null)
+            {
+                result = ReadAnyColorProperty(terrain.materialTemplate, Color.white);
+                return true;
+            }
+
+            return false;
         }
-    }
 
-    return false;
-}
-
-// Apply the given color to your rubble particle systems / renderers.
-void ApplyColorToRubble(Color c)
-{
-    // Particle Systems startColor
-    foreach (var ps in rubbleParticles)
-    {
-        if (!ps) continue;
-        var main = ps.main;
-        main.startColor = new ParticleSystem.MinMaxGradient(c);
-    }
-
-    if (!rubbleAffectsMaterialColor) return;
-
-    // Also tint particle materials (URP Particles Lit/Unlit often use _BaseColor; legacy uses _Color or _TintColor)
-    foreach (var r in rubbleRenderers)
-    {
-        if (!r) continue;
-        var mats = r.materials; // per-instance
-        for (int i = 0; i < mats.Length; i++)
+        // 2) Mesh / Static objects
+        var rend = hit.collider.GetComponentInParent<Renderer>();
+        if (rend != null)
         {
-            var m = mats[i];
-            if (!m) continue;
+            var mat = rend.sharedMaterial;
+            if (mat != null)
+            {
+                Color matCol = ReadAnyColorProperty(mat, Color.white);
 
-            bool set = false;
-            if (m.HasProperty("_BaseColor")) { m.SetColor("_BaseColor", c); set = true; }
-            if (!set && m.HasProperty("_Color")) { m.SetColor("_Color", c); set = true; }
-            if (!set && m.HasProperty("_TintColor")) { m.SetColor("_TintColor", c); set = true; }
+                Color texCol = Color.white;
+                var tex = GetAnyBaseTexture(mat);
+                if (tex != null && hit.textureCoord != Vector2.zero)
+                {
+                    var t2 = tex as Texture2D;
+                    if (t2 != null && t2.isReadable)
+                    {
+                        texCol = t2.GetPixelBilinear(hit.textureCoord.x, hit.textureCoord.y);
+                    }
+                }
+
+                result = MultiplySRGB(matCol, texCol);
+                return true;
+            }
         }
-        r.materials = mats;
+
+        return false;
     }
-}
 
-// --- tiny utilities ---
+    void ApplyColorToRubble(Color c)
+    {
+        foreach (var ps in rubbleParticles)
+        {
+            if (!ps) continue;
+            var main = ps.main;
+            main.startColor = new ParticleSystem.MinMaxGradient(c);
+        }
 
-// Read a color from any common property the material might expose.
-static Color ReadAnyColorProperty(Material m, Color fallback)
-{
-    if (!m) return fallback;
-    if (m.HasProperty("_BaseColor")) return m.GetColor("_BaseColor");
-    if (m.HasProperty("_Color"))     return m.GetColor("_Color");
-    if (m.HasProperty("_TintColor")) return m.GetColor("_TintColor");
-    return fallback;
-}
+        if (!rubbleAffectsMaterialColor) return;
 
-// Find a plausible “base” texture on common properties.
-static Texture GetAnyBaseTexture(Material m)
-{
-    if (!m) return null;
-    if (m.HasProperty("_BaseMap"))    return m.GetTexture("_BaseMap");
-    if (m.HasProperty("_MainTex"))    return m.GetTexture("_MainTex");
-    if (m.HasProperty("_BaseColorMap")) return m.GetTexture("_BaseColorMap");
-    return null;
-}
+        foreach (var r in rubbleRenderers)
+        {
+            if (!r) continue;
+            var mats = r.materials; // per-instance
+            for (int i = 0; i < mats.Length; i++)
+            {
+                var m = mats[i];
+                if (!m) continue;
 
-// Multiply in sRGB-ish space (simple component-wise multiply works fine for tinting)
-static Color MultiplySRGB(Color a, Color b)
-{
-    return new Color(a.r * b.r, a.g * b.g, a.b * b.b, a.a * b.a);
-}
+                bool set = false;
+                if (m.HasProperty("_BaseColor")) { m.SetColor("_BaseColor", c); set = true; }
+                if (!set && m.HasProperty("_Color")) { m.SetColor("_Color", c); set = true; }
+                if (!set && m.HasProperty("_TintColor")) { m.SetColor("_TintColor", c); set = true; }
+            }
+            r.materials = mats;
+        }
+    }
+
+    // --- tiny utilities ---
+
+    static Color ReadAnyColorProperty(Material m, Color fallback)
+    {
+        if (!m) return fallback;
+        if (m.HasProperty("_BaseColor")) return m.GetColor("_BaseColor");
+        if (m.HasProperty("_Color"))     return m.GetColor("_Color");
+        if (m.HasProperty("_TintColor")) return m.GetColor("_TintColor");
+        return fallback;
+    }
+
+    static Texture GetAnyBaseTexture(Material m)
+    {
+        if (!m) return null;
+        if (m.HasProperty("_BaseMap"))      return m.GetTexture("_BaseMap");
+        if (m.HasProperty("_MainTex"))      return m.GetTexture("_MainTex");
+        if (m.HasProperty("_BaseColorMap")) return m.GetTexture("_BaseColorMap");
+        return null;
+    }
+
+    static Color MultiplySRGB(Color a, Color b)
+    {
+        return new Color(a.r * b.r, a.g * b.g, a.b * b.b, a.a * b.a);
+    }
 }

@@ -5,48 +5,22 @@ public abstract class GravityArea : MonoBehaviour
 {
     [SerializeField] private int _priority;
     public int Priority => _priority;
-    
-    void Start()
+
+    protected virtual void Awake()
     {
-        // Ensure this is a trigger collider
-        Collider collider = GetComponent<Collider>();
-        if (collider)
+        var col = GetComponent<Collider>();
+        if (!col)
         {
-            collider.isTrigger = true;
+            Debug.LogError($"{nameof(GravityArea)} requires a Collider.");
+            return;
         }
-        else
-        {
-            Debug.LogError("No Collider found on GravityArea!");
-        }
+        col.isTrigger = true; // areas should be triggers
     }
-    
-    public abstract Vector3 GetGravityDirection(GravityBody _gravityBody);
-    
-    // Make these methods virtual so derived classes can override them
-    protected virtual void OnTriggerEnter(Collider other)
-    {
-        GravityBody gravityBody = other.GetComponentInParent<GravityBody>();
-        if (gravityBody)
-        {
-            // Add this gravity area and force immediate alignment
-            gravityBody.AddGravityArea(this);
-        }
-    }
-    
-    protected virtual void OnTriggerExit(Collider other)
-    {
-        GravityBody gravityBody = other.GetComponentInParent<GravityBody>();
-        if (gravityBody)
-        {
-            // If this is a GravityBox, let it handle its own exit logic
-            if (this is GravityBox)
-            {
-                // GravityBox will handle this with its hysteresis system
-                return;
-            }
-            
-            // Otherwise, handle normally
-            gravityBody.RemoveGravityArea(this);
-        }
-    }
+
+    /// <summary>Return a world-space gravity down direction (does not need to be normalized).</summary>
+    public abstract Vector3 GetGravityDirection(GravityBody body);
+
+    // Default = no-op so derived classes can fully control add/remove timing.
+    protected virtual void OnTriggerEnter(Collider other) { }
+    protected virtual void OnTriggerExit(Collider other)  { }
 }

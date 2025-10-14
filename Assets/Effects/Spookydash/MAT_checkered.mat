@@ -8,7 +8,7 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: MAT_checkered
-  m_Shader: {fileID: -6465566751694194690, guid: a9216c67099b04a4e9fc261f0d1101e1, type: 3}
+  m_Shader: {fileID: -6465566751694194690, guid: dbd0aaa74f878b447b31239e4d1c8fd3, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords: []
@@ -30,7 +30,7 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _BaseText:
-        m_Texture: {fileID: 2800000, guid: e1f9bdb3f732f014eb491d39d51b0fbb, type: 3}
+        m_Texture: {fileID: 10305, guid: 0000000000000000f000000000000000, type: 0}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _BumpMap:
@@ -104,7 +104,7 @@ Material:
     - _CastShadows: 0
     - _ClearCoatMask: 0
     - _ClearCoatSmoothness: 0
-    - _Cull: 2
+    - _Cull: 0
     - _Cutoff: 0.5
     - _DetailAlbedoMapScale: 1
     - _DetailNormalMapScale: 1
@@ -129,6 +129,8 @@ Material:
     - _Surface: 0
     - _TopStrength: 0
     - _VertexCountsForAlpha: 1
+    - _VertexGamma: 1
+    - _VertexInfluence: 1
     - _WorkflowMode: 1
     - _ZTest: 4
     - _ZWrite: 1
@@ -140,6 +142,7 @@ Material:
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
     - _SpecColor: {r: 0.19999996, g: 0.19999996, b: 0.19999996, a: 1}
     - _TopTint: {r: 1, g: 1, b: 1, a: 1}
+    - _UnderColor: {r: 0, g: 0, b: 0, a: 0}
   m_BuildTextureStacks: []
 --- !u!114 &7400613589550311692
 MonoBehaviour:

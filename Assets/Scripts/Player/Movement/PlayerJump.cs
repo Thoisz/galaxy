@@ -105,36 +105,28 @@ public class PlayerJump : MonoBehaviour
 
     private void Update()
 {
-    // Ensure we still have a reference to the booster if the jetpack was (un)equiped at runtime
+    // Ensure booster ref if equipped/unequipped at runtime
     if (_boostJump == null)
-    _boostJump = GetComponentInChildren<BoostJump>(true);
+        _boostJump = GetComponentInChildren<BoostJump>(true);
 
     bool isGrounded = _playerMovement.IsGrounded();
 
-    // === HARD GATE ===
-    // If the jetpack booster is equipped+enabled, we're grounded, and Shift is held,
-    // swallow Space this frame so normal jump cannot fire.
+    // === HARD GATE (jetpack + Shift on ground swallows Space) ===
     bool jetpackEquipped =
         _boostJump != null &&
         _boostJump.isActiveAndEnabled &&
         _boostJump.gameObject.activeInHierarchy;
 
-    bool shiftHeld = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+    bool shiftHeld   = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
     bool blockJumpNow = jetpackEquipped && isGrounded && shiftHeld;
 
-#if UNITY_EDITOR
-    // Debug once per press to verify the gate
-    if (blockJumpNow && Input.GetKeyDown(KeyCode.Space))
-        Debug.Log("[PlayerJump] Blocked Space: jetpack equipped + Shift held on ground.");
-#endif
-
-    // Fall/anim bookkeeping
+    // Fall/anim bookkeeping (updates _currentFallTime, _lastFallTime, etc.)
     UpdateFallTracking(isGrounded);
 
-    // Landing reset
+    // Landing bookkeeping
     if (isGrounded && !_wasGroundedLastFrame)
     {
-        if (_currentFallTime > 0) _lastFallTime = _currentFallTime;
+        // _lastFallTime has already been captured by UpdateFallTracking()
         ResetJumps();
         _hasResetJumpsAfterGrounded = true;
     }
@@ -143,7 +135,7 @@ public class PlayerJump : MonoBehaviour
     {
         _hasResetJumpsAfterGrounded = false;
 
-        // Walked off a ledge → skip to air-jumps
+        // Walked off a ledge → skip first/double jump & move to air-jumps
         if (_wasGroundedLastFrame && _currentJumpCount == 0)
         {
             _jumpedFromGround  = false;
@@ -153,17 +145,19 @@ public class PlayerJump : MonoBehaviour
         }
     }
 
-    // If blocked, bail BEFORE reading Space logic (prevents normal jump)
+    // If jump is blocked this frame, bail before reading Space
     if (blockJumpNow)
     {
+        // Animator: IMMEDIATE zero on ground, otherwise count while truly falling
         if (_animator != null)
         {
-            if (!isGrounded && _isFalling) _animator.SetFloat("fallTime", _currentFallTime);
-            else if (isGrounded)           _animator.SetFloat("fallTime", _lastFallTime);
-            else                           _animator.SetFloat("fallTime", 0f);
+            if (isGrounded)                    _animator.SetFloat("fallTime", 0f);
+            else if (_isFalling)               _animator.SetFloat("fallTime", _currentFallTime);
+            else                               _animator.SetFloat("fallTime", 0f);
         }
+
         _wasGroundedLastFrame = isGrounded;
-        return; // swallow Space for this frame
+        return;
     }
 
     // Normal jump input (also allowed during dash), plus optional external suppression
@@ -174,12 +168,12 @@ public class PlayerJump : MonoBehaviour
         else           TryJump();
     }
 
-    // Animator fallTime maintenance
+    // Animator: IMMEDIATE zero on ground, otherwise count while truly falling
     if (_animator != null)
     {
-        if (!isGrounded && _isFalling) _animator.SetFloat("fallTime", _currentFallTime);
-        else if (isGrounded)           _animator.SetFloat("fallTime", _lastFallTime);
-        else                           _animator.SetFloat("fallTime", 0f);
+        if (isGrounded)                        _animator.SetFloat("fallTime", 0f);
+        else if (_isFalling)                   _animator.SetFloat("fallTime", _currentFallTime);
+        else                                   _animator.SetFloat("fallTime", 0f);
     }
 
     _wasGroundedLastFrame = isGrounded;
@@ -275,65 +269,76 @@ private void PerformJumpWithoutEndingDash(float force, float cooldown, AudioClip
 
     private void UpdateFallTracking(bool isGrounded)
 {
-    // Get gravity direction
-    Vector3 gravityDir = _gravityBody != null ? 
-        _gravityBody.GravityDirection.normalized : 
-        Vector3.down;
-        
-    // Check if we're actually falling (moving in the direction of gravity)
+    // Get gravity direction (down)
+    Vector3 gravityDir = _gravityBody != null
+        ? _gravityBody.GravityDirection.normalized
+        : Vector3.down;
+
+    // Velocity projected onto gravity (positive means moving *with* gravity)
     Vector3 velocity = _rigidbody.velocity;
-    bool isActuallyFalling = Vector3.Dot(velocity, gravityDir) > 0.1f; // Positive dot product means moving in gravity direction
-    
-    // NEW: Check if we've reached apex of jump (transition from rising to falling)
-    bool wasRising = !_wasActuallyFallingLastFrame && !isGrounded;
-    bool isNowFalling = isActuallyFalling && !isGrounded;
-    
-    // If we were rising and now we're falling, we've reached the apex
-    if (wasRising && isNowFalling && _jumpTriggerActive)
+    float   fallDot  = Vector3.Dot(velocity, gravityDir);
+
+    // Be responsive but not twitchy
+    const float FALL_START_THRESHOLD = 0.05f;  // start counting quickly
+    const float FALL_CONT_THRESHOLD  = 0.02f;  // keep counting with even smaller motion
+
+    bool isActuallyFallingNow = (!isGrounded) &&
+                                (fallDot > (_isFalling ? FALL_CONT_THRESHOLD : FALL_START_THRESHOLD));
+
+    // Apex handling: rising -> falling transition while airborne
+    bool wasRisingThenFalling = !_wasActuallyFallingLastFrame && isActuallyFallingNow && !isGrounded;
+    if (wasRisingThenFalling && _jumpTriggerActive)
     {
-        // Reset jump trigger at apex
         if (_animator != null)
         {
             _animator.ResetTrigger("jump");
-            _animator.ResetTrigger("doubleJump"); 
+            _animator.ResetTrigger("doubleJump");
             _animator.ResetTrigger("airJump");
         }
         _jumpTriggerActive = false;
     }
-    
-    // Only track fall time when in the air
+
     if (!isGrounded)
     {
-        // If we just started falling
-        if (isActuallyFalling && !_wasActuallyFallingLastFrame)
+        if (isActuallyFallingNow && !_isFalling)
         {
+            // Just entered falling state
             _fallStartTime = Time.time;
             _isFalling = true;
         }
-        
-        // Only update fall time if we're actually falling
-        if (isActuallyFalling)
+
+        // Update fall timer only while truly falling
+        if (_isFalling)
         {
-            _currentFallTime = Time.time - _fallStartTime;
+            _currentFallTime = Mathf.Max(0f, Time.time - _fallStartTime);
         }
     }
     else
     {
-        // When we land, also reset jump trigger if it's still active
+        // On ground: freeze & store last fall duration, but DO NOT feed it to Animator anymore
+        if (_isFalling)
+        {
+            _lastFallTime = _currentFallTime;  // keep for gameplay/landing logic if you need it
+        }
+
+        // Reset live counters; Animator is driven to 0 in Update() when grounded
+        _currentFallTime = 0f;
+        _isFalling = false;
+
+        // If a jump trigger was still armed, clear it on land
         if (_jumpTriggerActive)
         {
             if (_animator != null)
             {
                 _animator.ResetTrigger("jump");
-                _animator.ResetTrigger("doubleJump"); 
+                _animator.ResetTrigger("doubleJump");
                 _animator.ResetTrigger("airJump");
             }
             _jumpTriggerActive = false;
         }
     }
-    
-    // Save state for next frame
-    _wasActuallyFallingLastFrame = isActuallyFalling;
+
+    _wasActuallyFallingLastFrame = isActuallyFallingNow;
 }
 
     private void TryJump()
