@@ -297,6 +297,13 @@ public class EquipmentManager : MonoBehaviour
     private Animator _playerAnimator;
     private readonly Dictionary<EquipableItem, List<GameObject>> _spawnedAttachmentInstances = new();
 
+// === Portrait / external sync hooks ===
+public event System.Action<EquipableItem> AccessoryEquipped;
+public event System.Action<EquipableItem> AccessoryUnequipped;
+
+// Optional getter for current accessory (portrait can pull on start)
+public EquipableItem GetCurrentlyEquippedAccessory() => _equippedAccessory;
+
     // =========================================================
     //             DETAIL PANEL ANIMATION SETTINGS
     // =========================================================
@@ -771,24 +778,27 @@ public void EnsureDetailPanelsUnderMainPanels()
     bool IsAccessoryEquipped(EquipableItem item) => _equippedAccessory == item;
 
     void EquipAccessory(EquipableItem item)
+{
+    if (item == null) return;
+    if (!PlayerOwns(item))
     {
-        if (item == null) return;
-        if (!PlayerOwns(item))
-        {
-            Debug.LogWarning($"Tried to equip '{item.itemName}' but it's not owned.");
-            return;
-        }
-
-        TryResolvePlayerRefs();
-
-        if (_equippedAccessory != null && _equippedAccessory != item)
-            UnequipAccessory(_equippedAccessory);
-
-        AttachItemPrefabs(item);
-
-        _equippedAccessory = item;
-        Debug.Log($"Equipped accessory '{item.itemName}'.");
+        Debug.LogWarning($"Tried to equip '{item.itemName}' but it's not owned.");
+        return;
     }
+
+    TryResolvePlayerRefs();
+
+    if (_equippedAccessory != null && _equippedAccessory != item)
+        UnequipAccessory(_equippedAccessory);
+
+    AttachItemPrefabs(item);
+
+    _equippedAccessory = item;
+    Debug.Log($"Equipped accessory '{item.itemName}'.");
+
+    // 🔔 Notify listeners (portrait sync, etc.)
+    AccessoryEquipped?.Invoke(item);
+}
 
     static void SetRenderersEnabled(GameObject go, bool enabled)
     {
@@ -814,17 +824,20 @@ public void EnsureDetailPanelsUnderMainPanels()
     }
 
     void UnequipAccessory(EquipableItem item)
-    {
-        if (item == null) return;
+{
+    if (item == null) return;
 
-        TryResolvePlayerRefs();
+    TryResolvePlayerRefs();
 
-        if (_equippedAccessory == item) _equippedAccessory = null;
+    if (_equippedAccessory == item) _equippedAccessory = null;
 
-        DetachItemPrefabs(item);
+    DetachItemPrefabs(item);
 
-        Debug.Log($"Unequipped accessory '{item.itemName}'.");
-    }
+    Debug.Log($"Unequipped accessory '{item.itemName}'.");
+
+    // 🔔 Notify listeners
+    AccessoryUnequipped?.Invoke(item);
+}
 
     void AttachItemPrefabs(EquipableItem item)
     {

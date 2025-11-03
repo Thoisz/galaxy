@@ -186,7 +186,7 @@ private void OnDisable()
 
     private void TryJumpFromDash()
 {
-    // Same safety gate here too
+    // Same safety gate as elsewhere (jetpack + Shift on ground)
     bool jetpackEquipped =
         _boostJump != null &&
         _boostJump.isActiveAndEnabled &&
@@ -202,69 +202,138 @@ private void OnDisable()
     }
 
     bool isGrounded = _playerMovement.IsGrounded();
-    if (!isGrounded) return;
 
+    // We will NOT end the dash in any branch below. We only notify the dash that we jumped.
+    // Clear/prepare shared fall bookkeeping (like in other jump paths)
     _lastFallTime = 0f;
     _currentFallTime = 0f;
     _isFalling = false;
     _wasActuallyFallingLastFrame = false;
 
-    if (_playerDash != null && _playerDash.IsDashing())
-        _playerDash.NotifyJumpedDuringDash();
-
-    float reducedJumpForce = _firstJumpForce * 0.6f;
-    PerformJumpWithoutEndingDash(reducedJumpForce, _firstJumpCooldown, _firstJumpSound);
-
-    _currentJumpCount = 1;
-    _hasDoubleJumped = false;
-    _jumpedFromGround = true;
-    _remainingAirJumps = _maxAirJumps;
-
-    _wasGroundedLastFrame = false;
-
-    if (_animator != null)
+    // --- 1) Grounded: perform a FULL first jump, same height as normal ground jump ---
+    if (isGrounded)
     {
-        _animator.SetTrigger("jump");
-        _jumpTriggerActive = true;
+        if (_playerDash != null && _playerDash.IsDashing())
+            _playerDash.NotifyJumpedDuringDash();
+
+        // Use full first jump force (no 0.6x nerf)
+        PerformJumpWithoutEndingDash(_firstJumpForce, _firstJumpCooldown, _firstJumpSound);
+
+        _currentJumpCount = 1;
+        _hasDoubleJumped = false;
+        _jumpedFromGround = true;
+        _remainingAirJumps = _maxAirJumps;
+
+        _wasGroundedLastFrame = false;
+
+        if (_animator != null)
+        {
+            _animator.SetTrigger("jump");
+            _jumpTriggerActive = true;
+        }
+
+        return;
     }
+
+    // --- 2) Airborne while dashing: allow double jump (if eligible), else air jump (if remaining) ---
+    // Double jump (only if we originally left ground via a first jump and haven't double-jumped yet)
+    if (!_hasDoubleJumped && _jumpedFromGround)
+    {
+        if (_playerStamina != null && !_playerStamina.TryUseJumpStamina())
+            return;
+
+        if (_playerDash != null && _playerDash.IsDashing())
+            _playerDash.NotifyJumpedDuringDash();
+
+        PerformJumpWithoutEndingDash(_doubleJumpForce, _doubleJumpCooldown, _doubleJumpSound);
+
+        _hasDoubleJumped = true;
+        _currentJumpCount = 2;
+
+        if (_doubleJumpVFXPrefab != null)
+            Instantiate(_doubleJumpVFXPrefab, transform.position, Quaternion.identity);
+
+        if (_animator != null)
+        {
+            _animator.SetTrigger("doubleJump");
+            _jumpTriggerActive = true;
+        }
+
+        return;
+    }
+
+    // Air jump(s)
+    if (_remainingAirJumps > 0)
+    {
+        if (_playerStamina != null && !_playerStamina.TryUseJumpStamina())
+            return;
+
+        if (_playerDash != null && _playerDash.IsDashing())
+            _playerDash.NotifyJumpedDuringDash();
+
+        PerformJumpWithoutEndingDash(_airJumpForce, _airJumpCooldown, _airJumpSound);
+
+        _currentJumpCount++;
+        _remainingAirJumps--;
+
+        // VFX parity with regular air jump
+        if (_airJumpVFXPrefab != null)
+        {
+            GameObject vfx = Instantiate(_airJumpVFXPrefab, transform.position, Quaternion.identity);
+            float progress = 1f - (float)_remainingAirJumps / _maxAirJumps;
+            float scale = _airJumpVFXScale * (1f - progress * 0.5f);
+            vfx.transform.localScale = new Vector3(scale, scale, scale);
+            var r = vfx.GetComponent<Renderer>();
+            if (r != null) r.material.color = Color.Lerp(_airJumpVFXColor, Color.white, progress);
+        }
+
+        if (_animator != null)
+        {
+            _animator.SetInteger("airJumpSide", _airJumpSide);
+            _animator.SetTrigger("airJump");
+            _jumpTriggerActive = true;
+            _airJumpSide = (_airJumpSide == 0) ? 1 : 0;
+        }
+
+        return;
+    }
+
+    // --- 3) No valid jump while dashing: do nothing ---
+    // (Keeps dash going, just no jump available)
 }
 
 private void PerformJumpWithoutEndingDash(float force, float cooldown, AudioClip sound)
 {
-    // Notify PlayerMovement that a jump has occurred
+    // Tell movement we jumped (sets timers/flags and forces ungrounded)
     if (_playerMovement != null)
-    {
         _playerMovement.NotifyJumped();
-    }
-    
-    // Calculate jump direction (opposite to gravity)
-    Vector3 jumpDir = _gravityBody != null ? 
-        -_gravityBody.GravityDirection.normalized : 
-        transform.up;
-    
-    // DON'T end the dash - let it continue running
-    
-    // FIXED: Use the exact same method as PerformJump()
-    // Clear vertical velocity (same as normal jump)
+
+    Vector3 jumpDir = _gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up;
+
+    // Break resting contact so the dash-jump always lifts cleanly
+    if (_playerMovement != null)
+        _playerMovement.PreJumpSeparation(0.03f);
+
+    // Preserve horizontal; clear vertical like a normal jump
     Vector3 currentVelocity = _rigidbody.velocity;
     Vector3 verticalVelocity = Vector3.Project(currentVelocity, jumpDir);
     _rigidbody.velocity = currentVelocity - verticalVelocity;
-    
-    // Apply jump force (same as normal jump) - this preserves horizontal dash velocity
+
+    // Impulse up
     _rigidbody.AddForce(jumpDir * force, ForceMode.Impulse);
-    
-    // Play sound if assigned
+
+    // SFX
     if (_audioSource != null && sound != null)
     {
         _audioSource.clip = sound;
         _audioSource.Play();
     }
-    
-    // Apply cooldown
+
     _lastJumpTime = Time.time;
-    
-    // Start cooldown coroutine
     StartCoroutine(JumpCooldown(cooldownTime: cooldown));
+
+    // Keep the dash alive; PlayerDash respects _hasJumpedDuringDash for vertical
+    // (no additional calls needed here)
 }
 
     private void UpdateFallTracking(bool isGrounded)
@@ -444,44 +513,39 @@ private void PerformJumpWithoutEndingDash(float force, float cooldown, AudioClip
 
     private void PerformJump(float force, float cooldown, AudioClip sound)
 {
-    // Notify PlayerMovement that a jump has occurred
+    // Notify movement first (sets timers/flags and forces ungrounded)
     if (_playerMovement != null)
-    {
         _playerMovement.NotifyJumped();
-    }
-    
-    // Calculate jump direction (opposite to gravity)
-    Vector3 jumpDir = _gravityBody != null ? 
-        -_gravityBody.GravityDirection.normalized : 
-        transform.up;
-        
-    // If we're dashing, end the dash (this is for regular jumps, not dash-jumps)
-    if (_playerDash != null && _playerDash.IsDashing())
-    {
-        // Let dash script know we're ending the dash early for a jump
-        _playerDash.EndDashEarly();
-    }
-        
-    // Clear vertical velocity
+
+    Vector3 jumpDir = _gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up;
+
+    // Break resting contact on uneven ground before the impulse
+    if (_playerMovement != null)
+        _playerMovement.PreJumpSeparation(0.03f); // ~3cm is enough to avoid pinning
+
+    // Clear vertical velocity (same behavior as before)
     Vector3 currentVelocity = _rigidbody.velocity;
     Vector3 verticalVelocity = Vector3.Project(currentVelocity, jumpDir);
     _rigidbody.velocity = currentVelocity - verticalVelocity;
-    
-    // Apply a stronger jump force
+
+    // Apply jump impulse
     _rigidbody.AddForce(jumpDir * force, ForceMode.Impulse);
-    
-    // Play sound if assigned
+
+    // Optional SFX
     if (_audioSource != null && sound != null)
     {
         _audioSource.clip = sound;
         _audioSource.Play();
     }
-    
-    // Apply cooldown
+
     _lastJumpTime = Time.time;
-    
-    // Start cooldown coroutine
     StartCoroutine(JumpCooldown(cooldownTime: cooldown));
+
+    // If we were dashing, the normal jump ends the dash early (as you had before)
+    if (_playerDash != null && _playerDash.IsDashing())
+    {
+        _playerDash.EndDashEarly();
+    }
 }
     
     private IEnumerator JumpCooldown(float cooldownTime)

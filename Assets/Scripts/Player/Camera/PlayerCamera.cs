@@ -358,30 +358,31 @@ public void SetExternalCameraOffset(Vector3 worldOffset)
 }
 
     private void HandleInput()
+{
+    bool inGravityTransition = gravityBody != null && gravityBody.IsTransitioningGravity;
+    bool isDashing = playerDash != null && playerDash.IsDashing();
+
+    // ✅ Always allow zoom — including during dash
+    HandleZoomInput();
+
+    // Optionally pause rotation during gravity transitions (unchanged behavior)
+    if (inGravityTransition && pauseRotationDuringGravityTransition)
+        return;
+
+    Vector2 mouseDelta = Mouse.current.delta.ReadValue();
+    mouseDelta = Vector2.Scale(mouseDelta, new Vector2(0.97f, 0.97f));
+
+    bool rightMouseDown = Mouse.current.rightButton.isPressed;
+
+    if (isInFirstPerson)
     {
-        bool inGravityTransition = gravityBody != null && gravityBody.IsTransitioningGravity;
-        bool isDashing = playerDash != null && playerDash.IsDashing();
-
-        if (inGravityTransition && pauseRotationDuringGravityTransition)
-            return;
-
-        if (!isDashing)
-            HandleZoomInput();
-
-        Vector2 mouseDelta = Mouse.current.delta.ReadValue();
-        mouseDelta = Vector2.Scale(mouseDelta, new Vector2(0.97f, 0.97f));
-
-        bool rightMouseDown = Mouse.current.rightButton.isPressed;
-
-        if (isInFirstPerson)
-        {
-            HandleFirstPersonLook(mouseDelta);
-        }
-        else
-        {
-            HandleThirdPersonLook(mouseDelta, rightMouseDown);
-        }
+        HandleFirstPersonLook(mouseDelta);
     }
+    else
+    {
+        HandleThirdPersonLook(mouseDelta, rightMouseDown);
+    }
+}
 
     private void HandleZoomInput()
     {

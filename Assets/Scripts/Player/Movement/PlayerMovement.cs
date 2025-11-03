@@ -222,32 +222,107 @@ public class PlayerMovement : MonoBehaviour
     }
 
     private bool CheckGrounded()
+{
+    if (_groundCheck == null) return false;
+
+    // Down = gravityDir, Up = -gravityDir
+    Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
+    Vector3 up = -gravityDir;
+
+    // Respect a short "ungrounded" window after we initiated a jump
+    float timeSinceJump = Time.time - _lastJumpTime;
+    if (timeSinceJump < 0.2f) // keep this generous; it prevents instant re-ground on rough triangles
+        return false;
+
+    // Prefer a capsule cast grounded test (robust against bumpy terrain)
+    var capsule = GetComponent<CapsuleCollider>();
+    if (capsule != null)
     {
-        if (_groundCheck == null) return false;
+        // World-space capsule endpoints
+        float radius = Mathf.Max(0.01f, capsule.radius * Mathf.Abs(transform.lossyScale.x));
+        float height = Mathf.Max(radius * 2f + 0.01f, capsule.height * Mathf.Abs(transform.lossyScale.y));
+        Vector3 centerWS = transform.TransformPoint(capsule.center);
 
-        // Get gravity direction
-        Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
+        Vector3 bottom = centerWS - up * (height * 0.5f - radius);
+        Vector3 top    = centerWS + up * (height * 0.5f - radius);
 
-        // ALWAYS return false for a short time after jumping
-        float timeSinceJump = Time.time - _lastJumpTime;
-        if (timeSinceJump < 0.2f) // Force "not grounded" for 0.2 seconds after jumping
+        // Start slightly "above" to avoid starting overlapped on uneven ground
+        const float startLift = 0.02f;
+        Vector3 castStartBottom = bottom + up * startLift;
+        Vector3 castStartTop    = top    + up * startLift;
+
+        // Cast a short distance "down" to find ground
+        float castDistance = _groundCheckRadius + 0.15f;
+
+        if (Physics.CapsuleCast(
+                castStartBottom,
+                castStartTop,
+                radius * 0.98f,          // tiny shrink to reduce initial overlap hits
+                -up,                      // cast direction is "down"
+                out RaycastHit hit,
+                castDistance,
+                _groundMask,
+                QueryTriggerInteraction.Ignore))
         {
-            return false;
+            // Slope filter: consider "ground" only if the surface normal is close enough to Up
+            // (60° default; tweak if you have a project-wide slope limit elsewhere)
+            const float maxSlopeDeg = 60f;
+            float cos = Vector3.Dot(hit.normal.normalized, up);
+            bool walkable = cos >= Mathf.Cos(maxSlopeDeg * Mathf.Deg2Rad);
+
+            // Separation bias: don't call it grounded if we're practically touching due to solver jitter
+            const float minSeparation = 0.005f;
+            bool separated = hit.distance > minSeparation;
+
+            return walkable && separated;
         }
-
-        // Use raycast instead of sphere check - more precise for ground detection
-        float rayDistance = _groundCheckRadius + 0.1f;
-        bool hitGround = Physics.Raycast(
-            _groundCheck.position,
-            gravityDir,
-            out RaycastHit hitInfo,
-            rayDistance,
-            _groundMask
-        );
-
-        // Only consider grounded if we're close enough to the ground
-        return hitGround && hitInfo.distance < rayDistance;
     }
+
+    // Fallback: simple ray from the groundCheck (less robust but OK as backup)
+    {
+        float rayDistance = _groundCheckRadius + 0.15f;
+        if (Physics.Raycast(
+                _groundCheck.position,
+                gravityDir,
+                out RaycastHit hitInfo,
+                rayDistance,
+                _groundMask,
+                QueryTriggerInteraction.Ignore))
+        {
+            const float minSeparation = 0.005f;
+            return hitInfo.distance > minSeparation;
+        }
+    }
+
+    return false;
+}
+
+/// <summary>
+/// Nudge the body slightly along Up to break resting contact before a jump impulse.
+/// Also removes any tiny downward velocity along gravity to avoid solver "pinning".
+/// Safe to call only when about to jump.
+/// </summary>
+public void PreJumpSeparation(float lift = 0.03f)
+{
+    if (_rigidbody == null) return;
+
+    Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
+    Vector3 up = -gravityDir;
+
+    // Small positional lift to clear micro-contacts on uneven terrain
+    _rigidbody.position += up * Mathf.Max(0f, lift);
+
+    // If we are moving slightly "down", clear that component so the impulse isn't countered
+    Vector3 v = _rigidbody.velocity;
+    float vAlongDown = Vector3.Dot(v, gravityDir);
+    if (vAlongDown > 0f)
+    {
+        _rigidbody.velocity = v - gravityDir * vAlongDown;
+    }
+
+    // Also mark ourselves ungrounded immediately (defensive; NotifyJumped does this too)
+    _isGrounded = false;
+}
 
     private void CalculateMoveDirection(float horizontal, float vertical)
     {
