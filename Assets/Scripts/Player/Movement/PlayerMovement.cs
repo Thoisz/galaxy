@@ -1,761 +1,535 @@
 using UnityEngine;
 using System.Collections.Generic;
 
+[DisallowMultipleComponent]
 public class PlayerMovement : MonoBehaviour
 {
+    public static PlayerMovement instance; // kept for other systems
+
     [Header("References")]
     [SerializeField] private Transform _groundCheck;
-    [SerializeField] private Animator _animator;
+    [SerializeField] private Animator  _animator;
     [SerializeField] private Transform _cameraTransform;
 
-    [Header("Movement Settings")]
+    [Header("Movement")]
     [SerializeField] private LayerMask _groundMask;
     [SerializeField] private float _groundCheckRadius = 0.3f;
     [SerializeField] private float _moveSpeed = 8f;
-    [SerializeField] private float _runningTurnSpeed = 15f;
     [SerializeField] private float _groundFrictionDamp = 10f;
 
-    [Header("Equipment Speed Modifiers")]
-    private float _baseMoveSpeed; // We'll set this from your current _moveSpeed value
-    private List<float> _speedModifiers = new List<float>();
+    [Header("Slope (Binary)")]
+    [Tooltip("Max angle (deg) that is walkable. Anything steeper will slide.")]
+    [SerializeField, Range(0f, 89f)] private float _maxSlopeAngleDeg = 55f;
 
-    [Header("Wall Interaction")]
-    [SerializeField] private float _wallCheckDistance = 0.6f;
+    [Tooltip("How far sideways from the ground-check we still consider 'under the feet'.")]
+    [SerializeField] private float _underfootHorizontalTolerance = 0.22f;
 
-    [Header("Boost Jump / Charge Integration")]
-    [SerializeField] private float _postBoostMoveLockSeconds = 0.18f; // don't overwrite horizontal right after a boost jump
-    private bool _externalStopMovement = false;                       // hard stop while charging (any system can toggle)
+    [Tooltip("Deg of hysteresis to stop flicker right at the threshold.")]
+    [SerializeField] private float _slopeHysteresisDeg = 2f;
 
-    // --- External horizontal hold (for boost jumps, leaps, etc.) ---
-    [SerializeField] private float _externalHorizHoldDefault = 0.35f; // fallback if caller passes <= 0
-    private bool   _externalHorizontalHeld = false;
-    private float  _externalHorizHoldUntil = 0f;
-    private Vector3 _externalHorizVelocity = Vector3.zero;
+    [Tooltip("Acceleration applied along unwalkable slopes (m/s^2).")]
+    [SerializeField] private float _slideAccel = 30f;
 
-    // Private references
-    private Rigidbody _rigidbody;
-    private GravityBody _gravityBody;
-    private Vector3 _moveDirection;
-    private Vector3 _worldMoveDirection;
+    [Tooltip("Maximum slide speed along the slope (m/s).")]
+    [SerializeField] private float _slideMaxSpeed = 14f;
+
+    [Header("Boost/Charge Integration")]
+    [SerializeField] private float _postBoostMoveLockSeconds = 0.18f;
+
+    [Header("Anti-Slide (Collider Friction)")]
+    [SerializeField] private float _groundStaticFriction  = 1.5f;
+    [SerializeField] private float _groundDynamicFriction = 0.8f;
+    [SerializeField] private PhysicMaterialCombine _groundFrictionCombine = PhysicMaterialCombine.Maximum;
+
+    [Header("External Hold (API compat)")]
+    [SerializeField] private float _externalHorizHoldDefault = 0.35f;
+
+    // -------- internals --------
+    private Rigidbody _rb;
+    private GravityBody _grav;
+    private PlayerCamera _cam;
+    private PlayerDash _dash;
+
+    private Vector3 _moveInput;           // local (x,z)
+    private Vector3 _worldMoveDir;        // camera-relative, horizontal to gravity
+    private bool _hasMoveInput;
+
+    private float _lastJumpTime = -10f;
     private bool _isGrounded;
-    private PlayerCamera _playerCamera;
-    private float _lastJumpTime = -10f; // Track when the last jump occurred
-    private PlayerDash _playerDash;
 
-    // Movement state
-    private Vector3 _lastFrameVelocity;
-    private bool _wasGroundedLastFrame;
-    private bool _hasMovementInput; // Added to track if there's active movement input
+    private float _baseMoveSpeed;
+    private readonly List<float> _speedModifiers = new();
 
-    // For preserving movement direction across gravity changes
-    private Vector3 _lastValidMoveDirection = Vector3.forward;
+    // keep a "last valid" move dir for API consumers
+    private Vector3 _lastValidMoveDir = Vector3.forward;
 
-    // Singleton for easy access from other scripts
-    public static PlayerMovement instance;
+    // free-look lock (kept because other systems rely on it)
+    private bool _freeLookActive, _waitingRealign, _wasLeftPan;
+    private Vector3 _lockedForward, _lockedRight, _lockedUp, _lockedWorldMove;
 
-    private bool _freeLookLockActive;
-    private bool _waitingForCameraRealign;
-    private bool _wasLeftPanActive;
-    private Vector3 _lockedWorldMoveDirection;
+    // materials
+    private PhysicMaterial _matGround, _matAir;
+    private Collider[] _selfCols;
 
-    // LMB free-look input frame (captured on LMB-pan start)
-    private Vector3 _lockedAxisForward;
-    private Vector3 _lockedAxisRight;
-    private Vector3 _lockedAxisUp;
-
-
-    void Start()
+    // ground probe result
+    private struct GroundInfo
     {
-        // Singleton setup
-        if (instance == null)
-        {
-            instance = this;
-        }
-        else
-        {
-            Destroy(gameObject);
-            return;
-        }
+        public bool hasHit;
+        public bool walkable;
+        public float slopeDeg;
+        public RaycastHit hit;
+    }
+    private GroundInfo _gi;
 
-        _rigidbody = GetComponent<Rigidbody>();
-        _gravityBody = GetComponent<GravityBody>();
-        _playerCamera = FindObjectOfType<PlayerCamera>();
-        _playerDash = GetComponent<PlayerDash>();
+    // External control (API compatibility with BoostJump, etc.)
+    private bool   _externalStopMovement = false;
+    private bool   _externalHoldActive = false;
+    private float  _externalHoldUntil = 0f;
+    private Vector3 _externalHeldHorizVel = Vector3.zero;
 
-        // Store the base speed from your inspector value
+    void Awake()
+    {
+        if (instance && instance != this) { Destroy(gameObject); return; }
+        instance = this;
+
+        _rb   = GetComponent<Rigidbody>();
+        _grav = GetComponent<GravityBody>();
+        _cam  = FindObjectOfType<PlayerCamera>();
+        _dash = GetComponent<PlayerDash>();
+
+        _rb.useGravity = false;
+        _rb.interpolation = RigidbodyInterpolation.Interpolate;
+
         _baseMoveSpeed = _moveSpeed;
 
-        // Create and apply frictionless material
-        CreateAndApplyFrictionlessMaterial();
+        InitMaterials();
 
-        if (_groundCheck == null)
-            Debug.LogWarning("GroundCheck transform not assigned on PlayerMovement.");
-        if (_animator == null)
-            Debug.LogWarning("Animator not assigned on PlayerMovement.");
-        if (_cameraTransform == null && Camera.main != null)
-            _cameraTransform = Camera.main.transform;
+        if (!_cameraTransform && Camera.main) _cameraTransform = Camera.main.transform;
+        if (!_groundCheck) Debug.LogWarning("PlayerMovement: GroundCheck not set.");
+    }
+
+    void OnDestroy()
+    {
+        if (instance == this) instance = null;
     }
 
     void Update()
-{
-    // 1) Ground check
-    _wasGroundedLastFrame = _isGrounded;
-    _isGrounded = CheckGrounded();
-
-    // 2) Read inputs
-    float h = Input.GetAxisRaw("Horizontal");
-    float v = Input.GetAxisRaw("Vertical");
-
-    bool bothMouseButtons = Input.GetMouseButton(0) && Input.GetMouseButton(1);
-    if (bothMouseButtons)
     {
-        // WoW-style autorun: move forward relative to current camera
-        h = 0f;
-        v = 1f;
+        // Probe (for animator/state — physics is in FixedUpdate)
+        _gi = ProbeGround();
+        _isGrounded = _gi.walkable;
 
-        // Cancel any LMB free-look state
-        _freeLookLockActive = false;
-        _waitingForCameraRealign = false;
-    }
+        // Input
+        float h = Input.GetAxisRaw("Horizontal");
+        float v = Input.GetAxisRaw("Vertical");
+        bool bothMouseButtons = Input.GetMouseButton(0) && Input.GetMouseButton(1);
+        if (bothMouseButtons) { h = 0f; v = 1f; _freeLookActive = false; _waitingRealign = false; }
 
-    // Movement intent (WASD/Stick or autorun)
-    _hasMovementInput = (Mathf.Abs(h) > 0.1f || Mathf.Abs(v) > 0.1f);
+        // If external stop is active, zero user intent
+        if (_externalStopMovement) { h = 0f; v = 0f; }
 
-    // 3) LMB free-look state (check BEFORE we calculate any directions)
-    bool leftPanActive = _playerCamera != null && _playerCamera.IsLeftPanningActive();
-
-    // Rising edge: LMB pan just began → capture the input reference frame
-    if (leftPanActive && !_wasLeftPanActive && !bothMouseButtons)
-    {
-        Vector3 up = _gravityBody != null ? -_gravityBody.GravityDirection.normalized : Vector3.up;
-
-        // Use the camera's frame at the *moment* we start free-looking
-        Vector3 fwd = Vector3.ProjectOnPlane(_cameraTransform.forward, up).normalized;
-        if (fwd.sqrMagnitude < 0.001f)
-            fwd = Vector3.ProjectOnPlane(transform.forward, up).normalized; // fallback
-
-        Vector3 right = Vector3.Cross(up, fwd).normalized;
-
-        _lockedAxisUp      = up;
-        _lockedAxisForward = fwd;
-        _lockedAxisRight   = right;
-
-        _freeLookLockActive = true; // while LMB is down, use locked axes for input->world mapping
-    }
-
-    // 4) Decide move direction WITHOUT allowing a single live-camera frame to slip in
-    if (_waitingForCameraRealign)
-    {
-        // During the smooth behind-the-back realign we keep running straight
-        _worldMoveDirection = _lockedWorldMoveDirection;
-    }
-    else if (_freeLookLockActive && leftPanActive)
-    {
-        // While LMB is held: map input using the *captured* axes from pan start
-        CalculateMoveDirectionLocked(h, v);
-        // Keep a fresh copy for immediate use if release happens this very frame
-        if (_worldMoveDirection.sqrMagnitude > 0.001f)
-            _lockedWorldMoveDirection = _worldMoveDirection;
-    }
-    else
-    {
-        // Normal behavior (live camera-relative)
-        CalculateMoveDirection(h, v);
-    }
-
-    // 5) Handle LMB release AFTER we’ve already decided the movement for this frame
-    if (_wasLeftPanActive && !leftPanActive)
-    {
-        // If we were in LMB free-look and still moving, keep running straight while the camera eases behind
-        if (_freeLookLockActive && _hasMovementInput && _playerCamera != null)
+        // free-look capture
+        bool leftPan = _cam != null && _cam.IsLeftPanningActive();
+        if (leftPan && !_wasLeftPan && !bothMouseButtons)
         {
-            _waitingForCameraRealign = true;
-            _freeLookLockActive = false;
+            Vector3 up = -GetGravityDir();
+            Vector3 fwd = Vector3.ProjectOnPlane(_cameraTransform.forward, up).normalized;
+            if (fwd.sqrMagnitude < 0.001f) fwd = Vector3.ProjectOnPlane(transform.forward, up).normalized;
+            Vector3 right = Vector3.Cross(up, fwd).normalized;
+            _lockedUp = up; _lockedForward = fwd; _lockedRight = right;
+            _freeLookActive = true;
+        }
 
-            // IMPORTANT: do NOT recompute here — just use the already-updated locked vector
-            if (_lockedWorldMoveDirection.sqrMagnitude < 0.001f)
-                _lockedWorldMoveDirection = (_worldMoveDirection.sqrMagnitude > 0.001f) ? _worldMoveDirection : _lastValidMoveDirection;
-
-            _playerCamera.StartAutoAlignBehindPlayer(0.35f, () =>
-            {
-                _waitingForCameraRealign = false;
-            });
+        // decide world move dir (no rotation will be applied later)
+        if (_waitingRealign)
+        {
+            _worldMoveDir = _lockedWorldMove;
+        }
+        else if (_freeLookActive && leftPan)
+        {
+            CalculateMoveDirectionLocked(h, v);
+            if (_worldMoveDir.sqrMagnitude > 0.001f) _lockedWorldMove = _worldMoveDir;
         }
         else
         {
-            _freeLookLockActive = false;
+            CalculateMoveDirection(h, v);
         }
+
+        _hasMoveInput = _worldMoveDir.sqrMagnitude > 0.01f;
+
+        if (_wasLeftPan && !leftPan)
+        {
+            if (_freeLookActive && _hasMoveInput && _cam != null)
+            {
+                _waitingRealign = true;
+                _freeLookActive = false;
+                if (_lockedWorldMove.sqrMagnitude < 0.001f)
+                    _lockedWorldMove = (_worldMoveDir.sqrMagnitude > 0.001f) ? _worldMoveDir : _lockedForward;
+                _cam.StartAutoAlignBehindPlayer(0.35f, () => _waitingRealign = false);
+            }
+            else _freeLookActive = false;
+        }
+
+        if (!_hasMoveInput || bothMouseButtons) { _freeLookActive = false; _waitingRealign = false; }
+        _wasLeftPan = leftPan;
+
+        UpdateAnimator();
     }
-
-    // 6) Safety: if movement stops or both buttons are pressed, clear locks
-    if (!_hasMovementInput || bothMouseButtons)
-    {
-        _freeLookLockActive = false;
-        _waitingForCameraRealign = false;
-    }
-
-    _wasLeftPanActive = leftPanActive;
-
-    // 7) Animator
-    UpdateAnimator();
-}
 
     void FixedUpdate()
     {
-        // Store velocity for next frame
-        _lastFrameVelocity = _rigidbody.velocity;
+        // Physics probe
+        _gi = ProbeGround();
+        _isGrounded = _gi.walkable;
 
-        // Apply movement
-        ApplyMovement();
-
-        // Check for wall contact and handle it, or apply normal friction
-        Vector3 wallNormal;
-        if (!_isGrounded && CheckWallContact(out wallNormal))
+        // If on an unwalkable slope → slide (inputs won't change horizontal)
+        if (_gi.hasHit && !_gi.walkable)
         {
-            ApplyWallSliding(wallNormal);
+            ApplySteepSlide(_gi);
         }
         else
         {
-            // Apply normal friction
-            ApplyFriction();
+            ApplyMovementOrFriction();
         }
+
+        UpdateColliderMaterial();
     }
 
-    private bool CheckGrounded()
-{
-    if (_groundCheck == null) return false;
-
-    // Down = gravityDir, Up = -gravityDir
-    Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
-    Vector3 up = -gravityDir;
-
-    // Respect a short "ungrounded" window after we initiated a jump
-    float timeSinceJump = Time.time - _lastJumpTime;
-    if (timeSinceJump < 0.2f) // keep this generous; it prevents instant re-ground on rough triangles
-        return false;
-
-    // Prefer a capsule cast grounded test (robust against bumpy terrain)
-    var capsule = GetComponent<CapsuleCollider>();
-    if (capsule != null)
+    // ─────────────────────────────────────────────────────────────
+    // Ground probe with "underfoot" filter + hysteresis (stops twitch)
+    // ─────────────────────────────────────────────────────────────
+    private GroundInfo ProbeGround()
     {
-        // World-space capsule endpoints
-        float radius = Mathf.Max(0.01f, capsule.radius * Mathf.Abs(transform.lossyScale.x));
-        float height = Mathf.Max(radius * 2f + 0.01f, capsule.height * Mathf.Abs(transform.lossyScale.y));
-        Vector3 centerWS = transform.TransformPoint(capsule.center);
+        GroundInfo gi = default;
+        if (!_groundCheck) return gi;
 
-        Vector3 bottom = centerWS - up * (height * 0.5f - radius);
-        Vector3 top    = centerWS + up * (height * 0.5f - radius);
+        Vector3 gDir = GetGravityDir();
+        Vector3 up = -gDir;
 
-        // Start slightly "above" to avoid starting overlapped on uneven ground
-        const float startLift = 0.02f;
-        Vector3 castStartBottom = bottom + up * startLift;
-        Vector3 castStartTop    = top    + up * startLift;
+        // brief unground after jump so the takeoff frame doesn't instantly re-ground
+        if (Time.time - _lastJumpTime < 0.20f) return gi;
 
-        // Cast a short distance "down" to find ground
-        float castDistance = _groundCheckRadius + 0.15f;
-
-        if (Physics.CapsuleCast(
-                castStartBottom,
-                castStartTop,
-                radius * 0.98f,          // tiny shrink to reduce initial overlap hits
-                -up,                      // cast direction is "down"
-                out RaycastHit hit,
-                castDistance,
-                _groundMask,
-                QueryTriggerInteraction.Ignore))
+        bool Underfoot(RaycastHit hit)
         {
-            // Slope filter: consider "ground" only if the surface normal is close enough to Up
-            // (60° default; tweak if you have a project-wide slope limit elsewhere)
-            const float maxSlopeDeg = 60f;
+            Vector3 toHit = hit.point - _groundCheck.position;
+            float lateral = Vector3.ProjectOnPlane(toHit, gDir).magnitude;
+            float alongG  = Vector3.Dot(toHit, gDir); // >0 means “below” along gravity
+            return alongG > -0.01f && lateral <= Mathf.Max(_underfootHorizontalTolerance, _groundCheckRadius * 0.8f);
+        }
+
+        void Fill(RaycastHit hit)
+        {
+            gi.hasHit = true;
+            gi.hit = hit;
             float cos = Vector3.Dot(hit.normal.normalized, up);
-            bool walkable = cos >= Mathf.Cos(maxSlopeDeg * Mathf.Deg2Rad);
+            gi.slopeDeg = Mathf.Acos(Mathf.Clamp(cos, -1f, 1f)) * Mathf.Rad2Deg;
 
-            // Separation bias: don't call it grounded if we're practically touching due to solver jitter
-            const float minSeparation = 0.005f;
-            bool separated = hit.distance > minSeparation;
-
-            return walkable && separated;
+            // hysteresis (prevents flicker right at the limit)
+            float limit = _maxSlopeAngleDeg + (_isGrounded ? _slopeHysteresisDeg : -_slopeHysteresisDeg);
+            gi.walkable = gi.slopeDeg <= limit;
         }
-    }
 
-    // Fallback: simple ray from the groundCheck (less robust but OK as backup)
-    {
-        float rayDistance = _groundCheckRadius + 0.15f;
-        if (Physics.Raycast(
-                _groundCheck.position,
-                gravityDir,
-                out RaycastHit hitInfo,
-                rayDistance,
-                _groundMask,
-                QueryTriggerInteraction.Ignore))
+        // Prefer capsule cast
+        if (TryGetComponent(out CapsuleCollider capsule))
         {
-            const float minSeparation = 0.005f;
-            return hitInfo.distance > minSeparation;
-        }
-    }
+            float radius = Mathf.Max(0.01f, capsule.radius * Mathf.Abs(transform.lossyScale.x));
+            float height = Mathf.Max(radius * 2f + 0.01f, capsule.height * Mathf.Abs(transform.lossyScale.y));
+            Vector3 cWS = transform.TransformPoint(capsule.center);
+            Vector3 bottom = cWS - up * (height * 0.5f - radius);
+            Vector3 top    = cWS + up * (height * 0.5f - radius);
 
-    return false;
-}
+            const float lift = 0.02f;
+            Vector3 b0 = bottom + up * lift;
+            Vector3 t0 = top    + up * lift;
 
-/// <summary>
-/// Nudge the body slightly along Up to break resting contact before a jump impulse.
-/// Also removes any tiny downward velocity along gravity to avoid solver "pinning".
-/// Safe to call only when about to jump.
-/// </summary>
-public void PreJumpSeparation(float lift = 0.03f)
-{
-    if (_rigidbody == null) return;
+            float dist = _groundCheckRadius + 0.15f;
 
-    Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
-    Vector3 up = -gravityDir;
-
-    // Small positional lift to clear micro-contacts on uneven terrain
-    _rigidbody.position += up * Mathf.Max(0f, lift);
-
-    // If we are moving slightly "down", clear that component so the impulse isn't countered
-    Vector3 v = _rigidbody.velocity;
-    float vAlongDown = Vector3.Dot(v, gravityDir);
-    if (vAlongDown > 0f)
-    {
-        _rigidbody.velocity = v - gravityDir * vAlongDown;
-    }
-
-    // Also mark ourselves ungrounded immediately (defensive; NotifyJumped does this too)
-    _isGrounded = false;
-}
-
-    private void CalculateMoveDirection(float horizontal, float vertical)
-    {
-        // Get raw input direction
-        _moveDirection = new Vector3(horizontal, 0f, vertical).normalized;
-
-        // If we have camera and input, calculate direction relative to camera view
-        if (_cameraTransform != null && _moveDirection.magnitude > 0.1f)
-        {
-            // Get camera forward and right, but project them onto the plane perpendicular to gravity
-            Vector3 gravityUp = _gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up;
-
-            // Project camera forward/right onto character's horizontal plane
-            Vector3 cameraForward = Vector3.ProjectOnPlane(_cameraTransform.forward, gravityUp).normalized;
-            Vector3 cameraRight = Vector3.ProjectOnPlane(_cameraTransform.right, gravityUp).normalized;
-
-            // Calculate move direction in world space relative to camera view
-            _worldMoveDirection = (cameraForward * _moveDirection.z + cameraRight * _moveDirection.x).normalized;
-
-            // Store valid movement direction for gravity transitions
-            if (_worldMoveDirection.sqrMagnitude > 0.1f)
+            if (Physics.CapsuleCast(b0, t0, radius * 0.98f, -up, out RaycastHit hit, dist, _groundMask, QueryTriggerInteraction.Ignore)
+                && Underfoot(hit))
             {
-                _lastValidMoveDirection = _worldMoveDirection;
+                Fill(hit);
+                return gi;
             }
         }
-        else
+
+        // Fallback ray
+        float rayDistance = _groundCheckRadius + 0.15f;
+        if (Physics.Raycast(_groundCheck.position, gDir, out RaycastHit rh, rayDistance, _groundMask, QueryTriggerInteraction.Ignore)
+            && Underfoot(rh))
         {
-            _worldMoveDirection = Vector3.zero;
+            Fill(rh);
         }
+
+        return gi;
     }
-
-    private void ApplyMovement()
-{
-    // Skip during dash
-    if (_playerDash != null && _playerDash.IsDashing())
-        return;
-
-    // Respect a hard external stop (e.g., while charging a boost jump)
-    if (_externalStopMovement)
-        return;
 
     // ─────────────────────────────────────────────────────────────
-    // External horizontal hold (preserve a provided horizontal velocity)
-    // Requires these fields in the class:
-    // [SerializeField] private float _externalHorizHoldDefault = 0.35f;
-    // private bool _externalHorizontalHeld;
-    // private float _externalHorizHoldUntil;
-    // private Vector3 _externalHorizVelocity;
+    // Sliding (input has NO effect on horizontal while sliding)
     // ─────────────────────────────────────────────────────────────
-    bool externalHoldActive = false;
-    if (_externalHorizontalHeld)
+    private void ApplySteepSlide(GroundInfo gi)
     {
-        if (Time.time >= _externalHorizHoldUntil || _externalHorizVelocity.sqrMagnitude <= 0.0001f)
+        Vector3 gDir = GetGravityDir();
+        Vector3 downhill = Vector3.ProjectOnPlane(gDir, gi.hit.normal);
+        if (downhill.sqrMagnitude < 0.0001f) downhill = gDir; // near-vertical fallback
+        downhill.Normalize();
+
+        // accelerate along the slope
+        _rb.AddForce(downhill * _slideAccel, ForceMode.Acceleration);
+
+        // cap slide speed along the slope
+        float vAlong = Vector3.Dot(_rb.velocity, downhill);
+        if (vAlong > _slideMaxSpeed)
         {
-            _externalHorizontalHeld = false;
-            _externalHorizVelocity = Vector3.zero;
+            _rb.velocity -= downhill * (vAlong - _slideMaxSpeed);
         }
-        else
-        {
-            externalHoldActive = true;
-        }
+
+        // NOTE: no rotation here (we keep yaw exactly as-is)
     }
 
-    if (externalHoldActive)
+    // ─────────────────────────────────────────────────────────────
+    // Normal move/friction + external hold/stop compatibility
+    // ─────────────────────────────────────────────────────────────
+    private void ApplyMovementOrFriction()
     {
-        Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
-        Vector3 v = _rigidbody.velocity;
-        Vector3 vertical = Vector3.Project(v, gravityDir);
+        // Dash can own velocity
+        if (_dash && _dash.IsDashing()) return;
 
-        // Enforce the preserved horizontal exactly (do not let run-speed overwrite it)
-        _rigidbody.velocity = vertical + _externalHorizVelocity;
-
-        // Optional: face travel direction while the hold is active
-        if (_externalHorizVelocity.sqrMagnitude > 0.01f)
+        // Hard stop from external systems (e.g., charging)
+        if (_externalStopMovement)
         {
-            Quaternion face = Quaternion.LookRotation(_externalHorizVelocity.normalized, -gravityDir);
-            _rigidbody.rotation = Quaternion.Slerp(_rigidbody.rotation, face, Time.fixedDeltaTime * _runningTurnSpeed);
-        }
-        return; // do NOT run normal movement while hold is active
-    }
-
-    // Legacy post-boost lock window (kept for safety, can be removed if using the hold everywhere)
-    float sinceJump = Time.time - _lastJumpTime;
-    bool inPostBoostLock = sinceJump >= 0f && sinceJump < _postBoostMoveLockSeconds;
-    if (inPostBoostLock)
-    {
-        // Optional: still turn towards input while preserving the boost velocity
-        if (_worldMoveDirection.magnitude > 0.1f)
-        {
-            Quaternion targetRotation = Quaternion.LookRotation(
-                _worldMoveDirection,
-                _gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up
-            );
-            _rigidbody.rotation = Quaternion.Slerp(_rigidbody.rotation, targetRotation, Time.fixedDeltaTime * _runningTurnSpeed);
-        }
-        return; // don't overwrite horizontal during this short window
-    }
-
-    // If no move input, nothing to do
-    if (_worldMoveDirection.magnitude < 0.1f)
-        return;
-
-    // Normal movement (ground or air) AFTER the hold/window
-    float currentSpeed = GetCurrentMoveSpeed();
-    Vector3 targetVelocity = _worldMoveDirection * currentSpeed;
-
-    // Snap horizontal towards target each step
-    _rigidbody.AddForce(targetVelocity - GetHorizontalVelocity(), ForceMode.VelocityChange);
-
-    // Face movement
-    Quaternion faceMove = Quaternion.LookRotation(
-        _worldMoveDirection,
-        _gravityBody != null ? -_gravityBody.GravityDirection.normalized : transform.up
-    );
-    _rigidbody.rotation = Quaternion.Slerp(_rigidbody.rotation, faceMove, Time.fixedDeltaTime * _runningTurnSpeed);
-}
-
-
-    private void ApplyFriction()
-    {
-        if (IsExternalHorizHoldActive())
-        return;
-
-        // FIXED: Also skip friction during dash to avoid interfering with dash physics
-        if (_playerDash != null && _playerDash.IsDashing())
+            // kill horizontal only (keep vertical for gravity/jumps)
+            Vector3 gDir = GetGravityDir();
+            Vector3 v = _rb.velocity;
+            Vector3 vert = Vector3.Project(v, gDir);
+            _rb.velocity = vert;
             return;
-
-        if (_isGrounded)
-        {
-            // Apply friction on ground
-            ApplyHorizontalDamping(_groundFrictionDamp);
         }
-    }
 
-    private void ApplyHorizontalDamping(float dampFactor)
-    {
-        // Get gravity direction (or use global up if no gravity body)
-        Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
-
-        // Get horizontal and vertical components of velocity
-        Vector3 velocity = _rigidbody.velocity;
-        Vector3 verticalVelocity = Vector3.Project(velocity, gravityDir);
-        Vector3 horizontalVelocity = velocity - verticalVelocity;
-
-        // Only apply friction if not actively moving or if slowing down
-        if (_worldMoveDirection.magnitude < 0.1f || Vector3.Dot(horizontalVelocity.normalized, _worldMoveDirection) < 0.5f)
+        // External horizontal hold (preserve a provided horizontal velocity)
+        if (_externalHoldActive)
         {
-            // Lerp horizontal velocity to zero
-            horizontalVelocity = Vector3.Lerp(
-                horizontalVelocity,
-                Vector3.zero,
-                Time.fixedDeltaTime * dampFactor
-            );
-
-            // Apply the new total velocity
-            _rigidbody.velocity = verticalVelocity + horizontalVelocity;
+            if (Time.time >= _externalHoldUntil || _externalHeldHorizVel.sqrMagnitude <= 0.0001f)
+            {
+                _externalHoldActive = false;
+                _externalHeldHorizVel = Vector3.zero;
+            }
+            else
+            {
+                Vector3 gDir = GetGravityDir();
+                Vector3 v = _rb.velocity;
+                Vector3 vert = Vector3.Project(v, gDir);
+                _rb.velocity = vert + _externalHeldHorizVel;
+                // NOTE: no rotation while holding either
+                return;
+            }
         }
+
+        // If there’s no input, damp horizontal on ground
+        if (_worldMoveDir.sqrMagnitude < 0.01f)
+        {
+            if (_isGrounded) HorizontalFriction(_groundFrictionDamp);
+            return;
+        }
+
+        // brief window after jump/boost where we don't overwrite horizontal
+        if (Time.time - _lastJumpTime < _postBoostMoveLockSeconds) return;
+
+        float speed = GetCurrentMoveSpeed();
+        Vector3 targetVel = _worldMoveDir * speed;
+        Vector3 horiz = GetHorizontalVelocity();
+        _rb.AddForce(targetVel - horiz, ForceMode.VelocityChange);
+
+        // NOTE: no facing/rotation towards move direction
     }
 
-    private Vector3 GetHorizontalVelocity()
+    private void HorizontalFriction(float damp)
     {
-        // Get gravity direction (or use global up if no gravity body)
-        Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
+        Vector3 gDir = GetGravityDir();
+        Vector3 v = _rb.velocity;
+        Vector3 vert = Vector3.Project(v, gDir);
+        Vector3 horiz = v - vert;
 
-        // Get velocity and remove gravity component
-        Vector3 velocity = _rigidbody.velocity;
-        Vector3 verticalVelocity = Vector3.Project(velocity, gravityDir);
-        return velocity - verticalVelocity;
+        horiz = Vector3.Lerp(horiz, Vector3.zero, Time.fixedDeltaTime * Mathf.Max(1f, damp));
+        _rb.velocity = vert + horiz;
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // Input → world mapping (camera-relative on gravity plane)
+    // ─────────────────────────────────────────────────────────────
+    private void CalculateMoveDirection(float h, float v)
+    {
+        _moveInput = new Vector3(h, 0f, v).normalized;
+        if (_cameraTransform && _moveInput.sqrMagnitude > 0.01f)
+        {
+            Vector3 up = -GetGravityDir();
+            Vector3 fwd = Vector3.ProjectOnPlane(_cameraTransform.forward, up).normalized;
+            Vector3 right = Vector3.ProjectOnPlane(_cameraTransform.right,  up).normalized;
+            _worldMoveDir = (fwd * _moveInput.z + right * _moveInput.x).normalized;
+
+            if (_worldMoveDir.sqrMagnitude > 0.1f) _lastValidMoveDir = _worldMoveDir;
+        }
+        else _worldMoveDir = Vector3.zero;
+    }
+
+    private void CalculateMoveDirectionLocked(float h, float v)
+    {
+        _moveInput = new Vector3(h, 0f, v).normalized;
+        if (_moveInput.sqrMagnitude > 0.01f)
+        {
+            _worldMoveDir = (_lockedForward * _moveInput.z + _lockedRight * _moveInput.x).normalized;
+            if (_worldMoveDir.sqrMagnitude > 0.1f) _lastValidMoveDir = _worldMoveDir;
+        }
+        else _worldMoveDir = Vector3.zero;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Animator + helpers
+    // ─────────────────────────────────────────────────────────────
     private void UpdateAnimator()
-{
-    if (_animator == null) return;
-
-    _animator.SetBool("isGrounded", _isGrounded);
-
-    // While externally stopped (charging) or inside the post-boost lock, don't report "running"
-    bool inPostBoostLock = (Time.time - _lastJumpTime) < _postBoostMoveLockSeconds;
-    bool running = _hasMovementInput && !_externalStopMovement && !inPostBoostLock;
-    _animator.SetBool("isRunning", running);
-
-    float horizontalSpeed = GetHorizontalVelocity().magnitude;
-    float currentMaxSpeed = GetCurrentMoveSpeed();
-    _animator.SetFloat("moveSpeed", horizontalSpeed / currentMaxSpeed);
-}
-
-    // Map input using the axes captured at LMB-pan start (so camera free-look doesn't affect movement)
-private void CalculateMoveDirectionLocked(float horizontal, float vertical)
-{
-    _moveDirection = new Vector3(horizontal, 0f, vertical).normalized;
-
-    if (_moveDirection.magnitude > 0.1f)
     {
-        // Use the preserved "camera" frame
-        Vector3 cameraForward = _lockedAxisForward;
-        Vector3 cameraRight   = _lockedAxisRight;
-
-        _worldMoveDirection = (cameraForward * _moveDirection.z + cameraRight * _moveDirection.x).normalized;
-
-        if (_worldMoveDirection.sqrMagnitude > 0.1f)
-            _lastValidMoveDirection = _worldMoveDirection;
-    }
-    else
-    {
-        _worldMoveDirection = Vector3.zero;
-    }
-}
-
-    // Public methods that can be called from other scripts
-    public bool IsGrounded()
-    {
-        return _isGrounded;
+        if (!_animator) return;
+        _animator.SetBool("isGrounded", _isGrounded);
+        _animator.SetBool("isRunning", _hasMoveInput && (_gi.hasHit && _gi.walkable));
+        float horizSpeed = GetHorizontalVelocity().magnitude;
+        _animator.SetFloat("moveSpeed", horizSpeed / Mathf.Max(0.1f, GetCurrentMoveSpeed()));
     }
 
-    public Vector3 GetMoveDirection()
-    {
-        // If actively moving, return current direction
-        if (_worldMoveDirection.sqrMagnitude > 0.1f)
-            return _worldMoveDirection;
-
-        // If not actively moving but we're in a gravity transition, return the last valid direction
-        if (_gravityBody != null && _gravityBody.IsTransitioningGravity)
-            return _lastValidMoveDirection;
-
-        // Otherwise return current (probably zero) direction
-        return _worldMoveDirection;
-    }
-
-    public void AddSpeedModifier(float modifier)
-    {
-        _speedModifiers.Add(modifier);
-        Debug.Log($"Added speed modifier: +{modifier}. New speed: {GetCurrentMoveSpeed()}");
-    }
-
-    public void SetExternalStopMovement(bool on)
-{
-    _externalStopMovement = on;
-
-    if (on && _rigidbody != null)
-    {
-        // Zero horizontal immediately so we actually stand still this frame.
-        Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
-        Vector3 v = _rigidbody.velocity;
-        Vector3 vertical = Vector3.Project(v, gravityDir);
-        _rigidbody.velocity = vertical; // keep vertical, kill horizontal
-    }
-}
-
-    public void RemoveSpeedModifier(float modifier)
-    {
-        _speedModifiers.Remove(modifier);
-        Debug.Log($"Removed speed modifier: -{modifier}. New speed: {GetCurrentMoveSpeed()}");
-    }
-
-/// <summary>
-/// Preserve this horizontal (gravity-plane) velocity for 'seconds'.
-/// While active, ApplyMovement and friction won't overwrite horizontal,
-/// only vertical is allowed to change (gravity/jumps).
-/// </summary>
-public void HoldExternalHorizontal(Vector3 worldHorizontalVelocity, float seconds)
-{
-    // Project to horizontal just in case caller passes any vertical
-    Vector3 gravityDir = _gravityBody != null ? _gravityBody.GravityDirection.normalized : Vector3.down;
-    _externalHorizVelocity = Vector3.ProjectOnPlane(worldHorizontalVelocity, gravityDir);
-
-    float dur = seconds > 0f ? seconds : _externalHorizHoldDefault;
-    _externalHorizontalHeld = _externalHorizVelocity.sqrMagnitude > 0.0001f && dur > 0f;
-    _externalHorizHoldUntil = Time.time + dur;
-}
-
-/// <summary>
-/// Immediately end any active external horizontal hold.
-/// </summary>
-public void CancelExternalHorizontalHold()
-{
-    _externalHorizontalHeld = false;
-    _externalHorizVelocity  = Vector3.zero;
-    _externalHorizHoldUntil = 0f;
-}
-
-private bool IsExternalHorizHoldActive()
-{
-    if (!_externalHorizontalHeld) return false;
-    if (Time.time >= _externalHorizHoldUntil)
-    {
-        _externalHorizontalHeld = false;
-        _externalHorizVelocity = Vector3.zero;
-        return false;
-    }
-    return true;
-}
-
-    public float GetCurrentMoveSpeed()
-    {
-        float totalSpeed = _baseMoveSpeed;
-
-        // Add all speed modifiers
-        foreach (float modifier in _speedModifiers)
-        {
-            totalSpeed += modifier;
-        }
-
-        // Ensure minimum speed
-        return Mathf.Max(totalSpeed, 0.1f);
-    }
-
-    public float GetBaseMoveSpeed()
-    {
-        return _baseMoveSpeed;
-    }
-
-    // Optional: Method to test speed modifiers easily
-    [ContextMenu("Test Speed Boost")]
-    public void TestSpeedBoost()
-    {
-        AddSpeedModifier(10f); // Much more noticeable!
-    }
-
-    [ContextMenu("Remove Speed Boost")]
-    public void RemoveSpeedBoost()
-    {
-        RemoveSpeedModifier(10f);
-    }
-
-    [ContextMenu("Test CRAZY Speed Boost")]
-    public void TestCrazySpeedBoost()
-    {
-        AddSpeedModifier(20f); // SUPER fast!
-    }
-
-    [ContextMenu("Remove CRAZY Speed Boost")]
-    public void RemoveCrazySpeedBoost()
-    {
-        RemoveSpeedModifier(20f);
-    }
-
-    public bool HasMovementInput()
-    {
-        return _hasMovementInput;
-    }
+    public bool IsGrounded() => _isGrounded;
 
     public void NotifyJumped()
     {
         _lastJumpTime = Time.time;
-        _isGrounded = false; // Force grounded to false
+        _isGrounded = false;
     }
 
-    // Force update of movement direction - useful during gravity transitions
-    public void UpdateMovementDirection()
-    {
-        // Get raw input
-        float h = Input.GetAxisRaw("Horizontal");
-        float v = Input.GetAxisRaw("Vertical");
+    // === PUBLIC API (compat with your other scripts) ===
 
-        // Update movement direction
-        CalculateMoveDirection(h, v);
+    public void CancelExternalHorizontalHold()
+    {
+        _externalHoldActive = false;
+        _externalHeldHorizVel = Vector3.zero;
+        _externalHoldUntil = 0f;
     }
 
-    // For debugging - visualize ground check
-    void OnDrawGizmosSelected()
+    public void SetExternalStopMovement(bool on)
     {
-        if (_groundCheck != null)
+        _externalStopMovement = on;
+        if (on)
         {
-            // Use different colors for grounded state
-            Gizmos.color = Application.isPlaying && _isGrounded ? Color.green : Color.red;
-
-            // Draw ground check radius
-            Gizmos.DrawWireSphere(_groundCheck.position, _groundCheckRadius);
-
-            // Draw ray for ground detection
-            Vector3 gravityDir = _gravityBody != null && Application.isPlaying ? _gravityBody.GravityDirection.normalized : Vector3.down;
-            Gizmos.DrawRay(_groundCheck.position, gravityDir * (_groundCheckRadius + 0.1f));
+            Vector3 gDir = GetGravityDir();
+            Vector3 v = _rb.velocity;
+            Vector3 vert = Vector3.Project(v, gDir);
+            _rb.velocity = vert; // keep vertical, kill horizontal
         }
     }
 
-    // NEW METHODS FOR WALL INTERACTION
+    public bool HasMovementInput() => _hasMoveInput;
 
-    private void CreateAndApplyFrictionlessMaterial()
+    public Vector3 GetMoveDirection()
     {
-        // Find all colliders on this object
-        Collider[] colliders = GetComponents<Collider>();
+        if (_worldMoveDir.sqrMagnitude > 0.1f) return _worldMoveDir;
+        if (_grav && _grav.IsTransitioningGravity) return _lastValidMoveDir;
+        return _worldMoveDir;
+    }
 
-        if (colliders.Length > 0)
+    public void HoldExternalHorizontal(Vector3 worldHorizontalVelocity, float seconds)
+    {
+        Vector3 gDir = GetGravityDir();
+        _externalHeldHorizVel = Vector3.ProjectOnPlane(worldHorizontalVelocity, gDir);
+
+        float dur = (seconds > 0f) ? seconds : _externalHorizHoldDefault;
+        _externalHoldActive = _externalHeldHorizVel.sqrMagnitude > 0.0001f && dur > 0f;
+        _externalHoldUntil  = Time.time + dur;
+    }
+
+    /// <summary>Nudge up slightly and clear downward velocity before a jump impulse.</summary>
+    public void PreJumpSeparation(float lift = 0.03f)
+    {
+        Vector3 gDir = GetGravityDir();
+        Vector3 up = -gDir;
+
+        _rb.position += up * Mathf.Max(0f, lift);
+
+        Vector3 v = _rb.velocity;
+        float vAlongDown = Vector3.Dot(v, gDir);
+        if (vAlongDown > 0f)
+            _rb.velocity = v - gDir * vAlongDown;
+
+        _isGrounded = false;
+    }
+
+    // Speed API
+    public float GetCurrentMoveSpeed()
+    {
+        float total = _baseMoveSpeed;
+        for (int i = 0; i < _speedModifiers.Count; i++) total += _speedModifiers[i];
+        return Mathf.Max(0.1f, total);
+    }
+    public void AddSpeedModifier(float m)    => _speedModifiers.Add(m);
+    public void RemoveSpeedModifier(float m) => _speedModifiers.Remove(m);
+
+    private Vector3 GetGravityDir()
+    {
+        return _grav ? _grav.GetEffectiveGravityDirection().normalized : Vector3.down;
+    }
+
+    private Vector3 GetHorizontalVelocity()
+    {
+        Vector3 gDir = GetGravityDir();
+        Vector3 v = _rb.velocity;
+        return v - Vector3.Project(v, gDir);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Materials (sticky on walkable, frictionless otherwise)
+    // ─────────────────────────────────────────────────────────────
+    private void InitMaterials()
+    {
+        _selfCols = GetComponents<Collider>();
+
+        _matAir = new PhysicMaterial("PM_Air")
         {
-            // Create frictionless physics material
-            PhysicMaterial frictionlessMaterial = new PhysicMaterial("Frictionless");
-            frictionlessMaterial.dynamicFriction = 0f;
-            frictionlessMaterial.staticFriction = 0f;
-            frictionlessMaterial.frictionCombine = PhysicMaterialCombine.Minimum;
+            staticFriction = 0f, dynamicFriction = 0f,
+            frictionCombine = PhysicMaterialCombine.Minimum,
+            bounceCombine = PhysicMaterialCombine.Minimum
+        };
+        _matGround = new PhysicMaterial("PM_Ground")
+        {
+            staticFriction = Mathf.Max(0f, _groundStaticFriction),
+            dynamicFriction = Mathf.Max(0f, _groundDynamicFriction),
+            frictionCombine = _groundFrictionCombine,
+            bounceCombine = PhysicMaterialCombine.Minimum
+        };
 
-            // Apply to all colliders on character
-            foreach (Collider col in colliders)
-            {
-                col.material = frictionlessMaterial;
-            }
+        ApplyMat(_matAir); // start airborne
+    }
+
+    private void ApplyMat(PhysicMaterial m)
+    {
+        if (_selfCols == null) return;
+        for (int i = 0; i < _selfCols.Length; i++)
+            if (_selfCols[i]) _selfCols[i].material = m;
+    }
+
+    private void UpdateColliderMaterial()
+    {
+        bool onSteep = _gi.hasHit && !_gi.walkable;
+        PhysicMaterial target = (_isGrounded && !onSteep) ? _matGround : _matAir;
+        if (_selfCols == null) return;
+        for (int i = 0; i < _selfCols.Length; i++)
+        {
+            var c = _selfCols[i];
+            if (c && c.material != target) c.material = target;
         }
     }
 
-    private bool CheckWallContact(out Vector3 wallNormal)
+    // gizmos
+    private void OnDrawGizmosSelected()
     {
-        wallNormal = Vector3.zero;
-
-        // Skip if grounded
-        if (_isGrounded) return false;
-
-        // Check horizontal velocity - if we're not moving horizontally, no need to check walls
-        Vector3 horizontalVel = GetHorizontalVelocity();
-        if (horizontalVel.magnitude < 0.5f) return false;
-
-        // Raycast in the direction of movement to detect walls
-        if (Physics.Raycast(
-            transform.position,
-            horizontalVel.normalized,
-            out RaycastHit hit,
-            _wallCheckDistance,
-            _groundMask))
-        {
-            wallNormal = hit.normal;
-            return true;
-        }
-
-        return false;
-    }
-
-    private void ApplyWallSliding(Vector3 wallNormal)
-    {
-        // Current velocity
-        Vector3 velocity = _rigidbody.velocity;
-
-        // Project velocity onto the wall plane
-        Vector3 slideVelocity = Vector3.ProjectOnPlane(velocity, wallNormal);
-
-        // Apply the projected velocity
-        _rigidbody.velocity = slideVelocity;
+        if (!_groundCheck) return;
+        Gizmos.color = (_isGrounded ? Color.green : Color.red);
+        Gizmos.DrawWireSphere(_groundCheck.position, _groundCheckRadius);
+        Vector3 gDir = Application.isPlaying ? GetGravityDir() : Vector3.down;
+        Gizmos.DrawRay(_groundCheck.position, gDir * (_groundCheckRadius + 0.15f));
     }
 }
