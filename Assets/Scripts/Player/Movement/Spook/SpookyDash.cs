@@ -55,6 +55,10 @@ public class SpookyDash : MonoBehaviour
     [Header("Debug")]
     [SerializeField] private bool _log = false;
 
+    [Header("Advanced: Extra Scan Roots (optional)")]
+    [Tooltip("If some gear (like weapons/jetpack) is not a child of the player, add its root(s) here.")]
+    [SerializeField] private Transform[] _additionalScanRoots;
+
     // ── Events
     public event Action OnSpookyWindowBegan;
     public event Action OnSpookyWindowEnded;
@@ -100,6 +104,25 @@ public class SpookyDash : MonoBehaviour
     public bool  IsCooldownReady   => Time.time >= _cooldownReadyTime;
     public float CooldownRemaining => Mathf.Max(0f, _cooldownReadyTime - Time.time);
 
+    // ── Live refresh support
+    private bool _renderersDirty = true;  // force initial rescan
+    private bool _collidersDirty = true;
+    private float _nextAutoRescanTime = 0f;
+
+    /// <summary>Call this after you add/remove/parent equipment under the player (optional if you rely on auto-detection).</summary>
+    public void NotifyRenderersChanged()
+    {
+        _renderersDirty = true;
+        _collidersDirty = true;
+    }
+
+    // Unity will call this when children change (e.g., you parent the jetpack prefab to the chest bone)
+    private void OnTransformChildrenChanged()
+    {
+        _renderersDirty = true;
+        _collidersDirty = true;
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     private void Awake()
     {
@@ -134,9 +157,7 @@ public class SpookyDash : MonoBehaviour
         StopTrailImmediate();
         StopLingerImmediate();
         KillAllGhostsImmediate();
-
         RestorePlayerMaterials(); // safety
-
         SetCameraPhaseIgnore(false);
 
         _cooldownReadyTime = Time.time; // allow first spooky immediately
@@ -158,6 +179,20 @@ public class SpookyDash : MonoBehaviour
 
     private void Update()
     {
+        // ── Periodic light rescan so you don't have to call NotifyRenderersChanged()
+        bool spookyLikelyVisible = _spookyActiveThisDash || _isPhasing || _materialsOverridden;
+        float interval = spookyLikelyVisible ? 0.05f : 0.25f; // faster while active
+        if (Time.time >= _nextAutoRescanTime)
+        {
+            _renderersDirty = true;
+            _collidersDirty = true;
+            _nextAutoRescanTime = Time.time + interval;
+        }
+
+        // ── Keep caches in sync before we do any spooky logic
+        if (_renderersDirty) RefreshSnapshotsToCurrentChildren();
+        if (_collidersDirty) RefreshCollidersIfNeeded();
+
         bool isDashing = _playerDash != null && _playerDash.IsDashing();
 
         // Edge-detect: dash started
@@ -199,6 +234,10 @@ public class SpookyDash : MonoBehaviour
 
         // === Player material override while spooky (and phase grace) ===
         bool spookyActiveInclGrace = _spookyActiveThisDash && (spookyMainActive || _phaseGraceRoutine != null);
+
+        // Re-check renderers right before applying (if something changed this frame)
+        if (_renderersDirty) RefreshSnapshotsToCurrentChildren();
+
         if (spookyActiveInclGrace) ApplyPlayerMaterialOverride();
         else                       RestorePlayerMaterials();
 
@@ -277,31 +316,96 @@ public class SpookyDash : MonoBehaviour
     {
         _matSnapshots.Clear();
 
-        if (_skinned != null)
+        foreach (var r in GetAllScanRenderers())
         {
-            foreach (var r in _skinned)
+            if (!r) continue;
+            _matSnapshots.Add(new MatSnapshot
             {
-                if (!r) continue;
-                _matSnapshots.Add(new MatSnapshot
-                {
-                    renderer = r,
-                    originals = r.sharedMaterials != null ? (Material[])r.sharedMaterials.Clone() : Array.Empty<Material>()
-                });
+                renderer = r,
+                originals = r.sharedMaterials != null ? (Material[])r.sharedMaterials.Clone() : Array.Empty<Material>()
+            });
+        }
+    }
+
+    // Gather renderers under player plus any optional extra roots
+    private Renderer[] GetAllScanRenderers()
+    {
+        var list = new List<Renderer>(GetComponentsInChildren<Renderer>(true));
+        if (_additionalScanRoots != null)
+        {
+            for (int i = 0; i < _additionalScanRoots.Length; i++)
+            {
+                var t = _additionalScanRoots[i];
+                if (!t) continue;
+                list.AddRange(t.GetComponentsInChildren<Renderer>(true));
+            }
+        }
+        return list.ToArray();
+    }
+
+    // ── NEW: reconcile snapshots to current renderers (and keep afterimage caches fresh)
+    private void RefreshSnapshotsToCurrentChildren()
+    {
+        if (!_renderersDirty) return;
+
+        var currentRenderers = GetAllScanRenderers();
+        var currentSet = new HashSet<Renderer>(currentRenderers);
+
+        // Build set of renderers we already track
+        var existingSet = new HashSet<Renderer>();
+        for (int i = 0; i < _matSnapshots.Count; i++)
+        {
+            var r = _matSnapshots[i].renderer;
+            if (r) existingSet.Add(r);
+        }
+
+        // Add newcomers
+        foreach (var r in currentRenderers)
+        {
+            if (!r) continue;
+            if (existingSet.Contains(r)) continue;
+
+            var originals = r.sharedMaterials != null
+                ? (Material[])r.sharedMaterials.Clone()
+                : Array.Empty<Material>();
+
+            _matSnapshots.Add(new MatSnapshot { renderer = r, originals = originals });
+
+            // If spooky override is currently active, apply it to this new renderer immediately
+            if (_materialsOverridden && _afterimageMaterial)
+            {
+                int slots = Mathf.Max(1, originals?.Length ?? 1);
+                var arr = new Material[slots];
+                for (int m = 0; m < slots; m++) arr[m] = _afterimageMaterial;
+                r.sharedMaterials = arr;
             }
         }
 
-        if (_staticMeshes != null)
+        // Prune removed/orphaned renderers
+        _matSnapshots.RemoveAll(s => !s.renderer || !currentSet.Contains(s.renderer));
+
+        // Keep afterimage renderer lists fresh (only those under the player root are needed for baking)
+        _skinned = GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        _staticMeshes = GetComponentsInChildren<MeshRenderer>(true);
+
+        _renderersDirty = false;
+    }
+
+    // ── NEW: refresh colliders when gear changes (and enforce current phase state)
+    private void RefreshCollidersIfNeeded()
+    {
+        if (!_collidersDirty) return;
+
+        RefreshPlayerColliders();
+
+        // If we're currently phasing, move new colliders to phase layer right away
+        if (_isPhasing && _playerPhaseLayer >= 0 && _allCols != null)
         {
-            foreach (var r in _staticMeshes)
-            {
-                if (!r || r is SkinnedMeshRenderer) continue;
-                _matSnapshots.Add(new MatSnapshot
-                {
-                    renderer = r,
-                    originals = r.sharedMaterials != null ? (Material[])r.sharedMaterials.Clone() : Array.Empty<Material>()
-                });
-            }
+            foreach (var c in _allCols)
+                if (c) c.gameObject.layer = _playerPhaseLayer;
         }
+
+        _collidersDirty = false;
     }
 
     private void ApplyPlayerMaterialOverride()
@@ -319,6 +423,8 @@ public class SpookyDash : MonoBehaviour
             for (int m = 0; m < slots; m++) arr[m] = _afterimageMaterial;
             snap.renderer.sharedMaterials = arr;
         }
+
+        if (_log) Debug.Log($"[SpookyDash] Applying spooky material to {_matSnapshots.Count} renderers.");
         _materialsOverridden = true;
     }
 
@@ -438,13 +544,13 @@ public class SpookyDash : MonoBehaviour
         if (_lingerRoutine != null) { StopCoroutine(_lingerRoutine); _lingerRoutine = null; }
     }
 
+    // Updated: ensure caches are fresh so newly-equipped parts (jetpack) bake into afterimages
     private void SpawnOneGhostFrame(float globalAlphaMul)
     {
         if (!_afterimageEnabled || _afterimageMaterial == null) return;
 
-        if ((_skinned == null || _skinned.Length == 0) &&
-            (_staticMeshes == null || _staticMeshes.Length == 0))
-            CacheRenderers();
+        if (_renderersDirty || _skinned == null || _staticMeshes == null)
+            RefreshSnapshotsToCurrentChildren();
 
         int colorProp = Shader.PropertyToID("_BaseColor");
         bool hasBase = _afterimageMaterial.HasProperty(colorProp);
@@ -492,11 +598,13 @@ public class SpookyDash : MonoBehaviour
         go.transform.localScale = source.lossyScale;
 
         if (_posJitter > 0f)
+        {
             go.transform.position += new Vector3(
                 UnityEngine.Random.Range(-_posJitter, _posJitter),
                 UnityEngine.Random.Range(-_posJitter, _posJitter),
                 UnityEngine.Random.Range(-_posJitter, _posJitter)
             );
+        }
         if (_scaleJitter > 0f)
         {
             float j = 1f + UnityEngine.Random.Range(-_scaleJitter, _scaleJitter);
@@ -654,4 +762,15 @@ public class SpookyDash : MonoBehaviour
     }
 
     public void OnDashEnded() { _wasDashingLastFrame = false; }
+
+#if UNITY_EDITOR
+    [ContextMenu("SpookyDash • Rescan Renderers/Colliders Now")]
+    private void EditorRescanNow()
+    {
+        _renderersDirty = true;
+        _collidersDirty = true;
+        RefreshSnapshotsToCurrentChildren();
+        RefreshCollidersIfNeeded();
+    }
+#endif
 }

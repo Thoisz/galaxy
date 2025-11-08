@@ -20057,8 +20057,11 @@ MonoBehaviour:
   triggerKey: 32
   chargeTimeSeconds: 2
   maxLaunchVertical: 100
-  maxLaunchHorizontal: 40
+  maxLaunchHorizontal: 20
   requireMovementInputForHorizontal: 1
+  forwardBoostFromVertical: 0.35
+  preLaunchLift: 0.12
+  ungroundGrace: 0.18
   lockFlight: 1
   extraFallAcceleration: 1
   fallAccelMax: 25

@@ -15,6 +15,7 @@ public class PlayerMovement : MonoBehaviour
     [SerializeField] private LayerMask _groundMask;
     [SerializeField] private float _groundCheckRadius = 0.3f;
     [SerializeField] private float _moveSpeed = 8f;
+    [SerializeField] private float _turnSpeed = 12f;
     [SerializeField] private float _groundFrictionDamp = 10f;
 
     [Header("Slope (Binary)")]
@@ -52,6 +53,7 @@ public class PlayerMovement : MonoBehaviour
 
     private Vector3 _moveInput;           // local (x,z)
     private Vector3 _worldMoveDir;        // camera-relative, horizontal to gravity
+    private Vector3 _lastValidMoveDir = Vector3.forward;
     private bool _hasMoveInput;
 
     private float _lastJumpTime = -10f;
@@ -59,9 +61,6 @@ public class PlayerMovement : MonoBehaviour
 
     private float _baseMoveSpeed;
     private readonly List<float> _speedModifiers = new();
-
-    // keep a "last valid" move dir for API consumers
-    private Vector3 _lastValidMoveDir = Vector3.forward;
 
     // free-look lock (kept because other systems rely on it)
     private bool _freeLookActive, _waitingRealign, _wasLeftPan;
@@ -81,7 +80,7 @@ public class PlayerMovement : MonoBehaviour
     }
     private GroundInfo _gi;
 
-    // External control (API compatibility with BoostJump, etc.)
+    // External control (compat with BoostJump/Charge)
     private bool   _externalStopMovement = false;
     private bool   _externalHoldActive = false;
     private float  _externalHoldUntil = 0f;
@@ -140,7 +139,7 @@ public class PlayerMovement : MonoBehaviour
             _freeLookActive = true;
         }
 
-        // decide world move dir (no rotation will be applied later)
+        // decide world move dir
         if (_waitingRealign)
         {
             _worldMoveDir = _lockedWorldMove;
@@ -182,10 +181,17 @@ public class PlayerMovement : MonoBehaviour
         _gi = ProbeGround();
         _isGrounded = _gi.walkable;
 
-        // If on an unwalkable slope → slide (inputs won't change horizontal)
+        // If on an unwalkable slope → slide (inputs won't change horizontal, but CAN rotate)
         if (_gi.hasHit && !_gi.walkable)
         {
             ApplySteepSlide(_gi);
+
+            // Let input control yaw while sliding (but NOT velocity)
+            if (_hasMoveInput)
+            {
+                Quaternion face = Quaternion.LookRotation(_worldMoveDir, -GetGravityDir());
+                _rb.MoveRotation(Quaternion.Slerp(_rb.rotation, face, _turnSpeed * Time.fixedDeltaTime));
+            }
         }
         else
         {
@@ -283,7 +289,9 @@ public class PlayerMovement : MonoBehaviour
             _rb.velocity -= downhill * (vAlong - _slideMaxSpeed);
         }
 
-        // NOTE: no rotation here (we keep yaw exactly as-is)
+        // IMPORTANT: do NOT add/replace horizontal velocity from input while sliding.
+        // We only allow rotation (handled in FixedUpdate) so player can face/run input
+        // but still inevitably slides down.
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -319,7 +327,12 @@ public class PlayerMovement : MonoBehaviour
                 Vector3 v = _rb.velocity;
                 Vector3 vert = Vector3.Project(v, gDir);
                 _rb.velocity = vert + _externalHeldHorizVel;
-                // NOTE: no rotation while holding either
+                // Face input during holds if present
+                if (_hasMoveInput)
+                {
+                    Quaternion face = Quaternion.LookRotation(_worldMoveDir, -gDir);
+                    _rb.MoveRotation(Quaternion.Slerp(_rb.rotation, face, _turnSpeed * Time.fixedDeltaTime));
+                }
                 return;
             }
         }
@@ -339,7 +352,9 @@ public class PlayerMovement : MonoBehaviour
         Vector3 horiz = GetHorizontalVelocity();
         _rb.AddForce(targetVel - horiz, ForceMode.VelocityChange);
 
-        // NOTE: no facing/rotation towards move direction
+        // face move dir
+        Quaternion faceRot = Quaternion.LookRotation(_worldMoveDir, -GetGravityDir());
+        _rb.MoveRotation(Quaternion.Slerp(_rb.rotation, faceRot, _turnSpeed * Time.fixedDeltaTime));
     }
 
     private void HorizontalFriction(float damp)

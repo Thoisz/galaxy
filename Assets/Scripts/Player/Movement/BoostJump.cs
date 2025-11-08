@@ -19,7 +19,6 @@ public class BoostJump : MonoBehaviour
     [SerializeField] private bool debugFxBinding = false;
 
     [Header("Animator (optional)")]
-    [Tooltip("Animator with a bool parameter named `isBoostJump` (or rename below).")]
     [SerializeField] private Animator characterAnimator;
     [SerializeField] private string   isBoostJumpParam = "isBoostJump";
     [SerializeField] private bool     animatorDebugLogs = false;
@@ -36,14 +35,21 @@ public class BoostJump : MonoBehaviour
     [SerializeField] private float maxLaunchVertical = 18f;
 
     [Tooltip("Forward (flat) launch speed (world units/s).")]
-    [SerializeField] private float maxLaunchHorizontal = 24f;
+    [SerializeField] private float maxLaunchHorizontal = 40f;
 
     [Tooltip("Require movement input at the moment of launch to apply horizontal impulse.")]
     [SerializeField] private bool requireMovementInputForHorizontal = true;
 
+    [Tooltip("Add a slice of vertical speed into the horizontal if input exists.")]
+    [SerializeField, Range(0f, 1.5f)] private float forwardBoostFromVertical = 0.35f;
+
+    [Header("Ground detach assist")]
+    [SerializeField] private float preLaunchLift = 0.06f;     // small upward nudge before applying velocity
+    [SerializeField] private float ungroundGrace = 0.18f;     // time window to force ungrounded after launch
+
     [Header("Flight integration")]
     [Tooltip("If ON, we will NOT enter PlayerFlight after the boost. Horizontal is preserved to landing.")]
-    [SerializeField] private bool lockFlight = false;
+    [SerializeField] private bool lockFlight = true;
 
     [Header("Fall boost (no-flight path)")]
     [SerializeField] private bool           extraFallAcceleration = true;
@@ -55,7 +61,7 @@ public class BoostJump : MonoBehaviour
     [SerializeField] private AnimationCurve fallAccelCurve = AnimationCurve.EaseInOut(0,0, 1,1);
 
     [Header("Speedlines FX")]
-    [Tooltip("Optional. If empty, we search the scene for a GameObject named EXACTLY 'FX_speedlines' and use its ParticleSystem.\nKeep this object parented to the PLAYER ROOT (not the camera).")]
+    [Tooltip("Optional. If empty, we search the scene for a GameObject named EXACTLY 'FX_speedlines' and use its ParticleSystem.")]
     [SerializeField] private ParticleSystem speedlines;
     [SerializeField] private Vector3 speedlinesLookOffsetEuler = new Vector3(90f, 0f, 0f);
     [SerializeField] private bool speedlinesMatchCameraRoll = true;
@@ -63,12 +69,10 @@ public class BoostJump : MonoBehaviour
     [Header("Groundbreak FX")]
     [Tooltip("Optional. If empty, we search the scene for a prefab named EXACTLY 'FX_groundbreak' via Resources or in-scene.")]
     [SerializeField] private GameObject fxGroundbreakPrefab;
-    [Tooltip("If true and prefab isn’t assigned, will try Resources.Load(\"FX_groundbreak\"). Place your prefab in a Resources folder.")]
     [SerializeField] private bool tryResourcesLoad = true;
 
     [SerializeField] private JetpackRare jetpackRare; // auto-found in Awake if left empty
     private bool _chargedFlashOn = false;             // internal toggle state
-
 
     // ── internals ──
     private float _holdTimer = 0f;
@@ -79,8 +83,6 @@ public class BoostJump : MonoBehaviour
 
     private bool _prevCrouchHeld = false;
     private bool _prevSpaceHeld  = false;
-    private bool _hadMoveDuringCharge = false;
-    private bool _wasBoostJumpThisLaunch = false;
 
     // animator cache
     private bool _animHasParam = false;
@@ -97,8 +99,14 @@ public class BoostJump : MonoBehaviour
     private bool _flightLockActive = false;
     private bool _flightWasEnabled = false;
 
-    // Tracks whether the current boost wants speedlines (even if they're hidden in FP)
-private bool _speedlinesRequested = false;
+    // speedlines request
+    private bool _speedlinesRequested = false;
+
+    // Grounding grace
+    private float _forceUngroundedUntil = 0f;
+
+    // LATCHED INPUT: stores raw camera-planar input while charging (ignores external stop)
+    private Vector3 _latchedHorizDirWS = Vector3.zero;
 
     // ── lifecycle ──
     private void Awake()
@@ -137,9 +145,8 @@ private bool _speedlinesRequested = false;
             );
         }
 
-        // NEW: find the jetpack FX driver that owns the EnergyBallFlash children
         if (!jetpackRare) jetpackRare = GetComponentInParent<JetpackRare>(true);
-        jetpackRare?.SetChargedFlash(false); // ensure off at boot
+        jetpackRare?.SetChargedFlash(false);
 
         TryBindCameraBoostFx();
 
@@ -170,7 +177,7 @@ private bool _speedlinesRequested = false;
 
         _charging  = false;
         _holdTimer = 0f;
-        _hadMoveDuringCharge = false;
+        _latchedHorizDirWS = Vector3.zero;
 
         if (playerMovement)
         {
@@ -184,10 +191,7 @@ private bool _speedlinesRequested = false;
         SetBoostAnim(false);
         cameraBoostFx?.OnChargeCancel();
 
-        // hard stop the flash if object disables
-        _chargedFlashOn = false;
-        jetpackRare?.SetChargedFlash(false);
-
+        _speedlinesRequested = false;
         StopSpeedlines();
     }
 
@@ -208,12 +212,15 @@ private bool _speedlinesRequested = false;
         }
         else
         {
-            bool hasMove = playerMovement
-                ? playerMovement.HasMovementInput()
-                : (Mathf.Abs(Input.GetAxisRaw("Horizontal")) > 0.1f || Mathf.Abs(Input.GetAxisRaw("Vertical")) > 0.1f);
-            _hadMoveDuringCharge |= hasMove;
-
-            bool lostGround = !grounded;
+            // LATCH raw input every frame while charging (even though we externally stop movement)
+            Vector3 up = GetUp();
+            float h = Input.GetAxisRaw("Horizontal");
+            float v = Input.GetAxisRaw("Vertical");
+            Vector3 camF = playerCam ? Vector3.ProjectOnPlane(playerCam.transform.forward, up).normalized : Vector3.ProjectOnPlane(transform.forward, up).normalized;
+            Vector3 camR = playerCam ? Vector3.ProjectOnPlane(playerCam.transform.right,   up).normalized : Vector3.Cross(up, camF).normalized;
+            Vector3 rawDir = (camF * v + camR * h);
+            rawDir = Vector3.ProjectOnPlane(rawDir, up);
+            if (rawDir.sqrMagnitude > 0.0001f) _latchedHorizDirWS = rawDir.normalized;
 
             bool releasedCrouchThisFrame = _prevCrouchHeld && !crouchHeld;
             bool releasedSpaceThisFrame  = _prevSpaceHeld  && !spaceHeld;
@@ -225,7 +232,7 @@ private bool _speedlinesRequested = false;
                 if (_holdTimer >= chargeTimeSeconds) Launch();
                 else                                  CancelCharge();
             }
-            else if (lostGround)
+            else if (!grounded)
             {
                 CancelCharge();
             }
@@ -246,7 +253,7 @@ private bool _speedlinesRequested = false;
             Vector3 up   = GetUp();
             Vector3 v    = playerBody.velocity;
             Vector3 vert = Vector3.Project(v, up);
-            playerBody.velocity = vert;
+            playerBody.velocity = vert; // freeze horizontal while charging
         }
 
         // normalized charge 0..1
@@ -261,10 +268,7 @@ private bool _speedlinesRequested = false;
         {
             _chargedFlashOn = nowFull;
 
-            // your old flash toggle (keep if you still use it)
             jetpackRare?.SetChargedFlash(_chargedFlashOn);
-
-            // NEW: dust is ON while charging, OFF when full
             jetpackRare?.SetChargeDustVisible(!_chargedFlashOn);
         }
     }
@@ -275,88 +279,14 @@ private bool _speedlinesRequested = false;
         AlignSpeedlinesTowardCamera();
     }
 
-    private void Launch()
-{
-    _charging = false;
-    _wasBoostJumpThisLaunch = false;
-
-    _chargedFlashOn = false;
-    jetpackRare?.SetChargedFlash(false);
-
-    // hide orb + DUST when launching
-    jetpackRare?.SetEnergyBallMeshesVisible(false);
-    jetpackRare?.SetChargeDustVisible(false);
-
-    Vector3 horiz = Vector3.zero;
-
-    if (playerBody)
-    {
-        Vector3 up = GetUp();
-
-        float vMag = Mathf.Max(0f, maxLaunchVertical);
-        float hMag = Mathf.Max(0f, maxLaunchHorizontal);
-
-        Vector3 newVel = up * vMag;
-
-        Vector3 moveDir = Vector3.zero;
-        if (playerMovement != null)
-            moveDir = playerMovement.GetMoveDirection();
-        else
-        {
-            float h = Input.GetAxisRaw("Horizontal");
-            float v = Input.GetAxisRaw("Vertical");
-            moveDir = new Vector3(h, 0f, v);
-        }
-
-        moveDir = Vector3.ProjectOnPlane(moveDir, up);
-        bool hasMoveNow = moveDir.sqrMagnitude > 0.0001f;
-
-        Vector3 horizDir;
-        if (requireMovementInputForHorizontal)
-            horizDir = hasMoveNow ? moveDir.normalized : Vector3.zero;
-        else
-        {
-            Vector3 fallback = Vector3.ProjectOnPlane(transform.forward, up);
-            horizDir = (hasMoveNow ? moveDir : fallback).normalized;
-        }
-
-        if (horizDir.sqrMagnitude > 0.0001f && hMag > 0.001f)
-        {
-            horiz = horizDir * hMag;
-            newVel += horiz;
-        }
-
-        playerBody.velocity = newVel;
-
-        if (playerMovement && horiz.sqrMagnitude > 0.0001f)
-        {
-            playerMovement.HoldExternalHorizontal(horiz, 15f);
-            _wasBoostJumpThisLaunch = true;
-        }
-
-        cameraBoostFx?.OnLaunch(up);
-        SpawnGroundbreak(); // keep takeoff FX; remove if you don't want it
-    }
-
-    if (playerMovement) playerMovement.SetExternalStopMovement(false);
-    if (playerMovement) playerMovement.NotifyJumped();
-
-    SetBoostAnim(_wasBoostJumpThisLaunch);
-
-    // Request speedlines for the duration of this boost (even if hidden in FP)
-    _speedlinesRequested = true;
-    PlaySpeedlines();
-
-    StartCoroutine(BoostApexAndAfter());
-}
-
-    // ── actions ──
-
+    // ─────────────────────────────────────────────────────
+    // Start/Cancel charge (missing earlier)
+    // ─────────────────────────────────────────────────────
     private void StartCharge(bool crouchHeldNow, bool spaceHeldNow)
     {
         _charging  = true;
         _holdTimer = 0f;
-        _hadMoveDuringCharge = false;
+        _latchedHorizDirWS = Vector3.zero;
 
         _prevCrouchHeld = crouchHeldNow;
         _prevSpaceHeld  = spaceHeldNow;
@@ -365,7 +295,7 @@ private bool _speedlinesRequested = false;
         {
             Vector3 up   = GetUp();
             Vector3 vert = Vector3.Project(playerBody.velocity, up);
-            playerBody.velocity = vert;
+            playerBody.velocity = vert; // kill horizontal while charging
         }
 
         if (playerMovement) playerMovement.SetExternalStopMovement(true);
@@ -375,7 +305,6 @@ private bool _speedlinesRequested = false;
 
         LockFlightEntry(true);
 
-        // reset flash state on new charge
         _chargedFlashOn = false;
         jetpackRare?.SetChargedFlash(false);
 
@@ -386,98 +315,195 @@ private bool _speedlinesRequested = false;
         jetpackRare?.SetChargeDustVisible(true);
     }
 
-    // Cancel charging: turn OFF energy balls
-private void CancelCharge()
-{
-    _chargedFlashOn = false;
-    jetpackRare?.SetChargedFlash(false);
+    private void CancelCharge()
+    {
+        _chargedFlashOn = false;
+        jetpackRare?.SetChargedFlash(false);
 
-    // hide orb + DUST when not charging
-    jetpackRare?.SetEnergyBallMeshesVisible(false);
-    jetpackRare?.SetChargeDustVisible(false);
+        // hide orb + DUST when not charging
+        jetpackRare?.SetEnergyBallMeshesVisible(false);
+        jetpackRare?.SetChargeDustVisible(false);
 
-    if (!_charging) return;
+        if (!_charging) return;
 
-    _charging  = false;
-    _holdTimer = 0f;
-    _hadMoveDuringCharge = false;
+        _charging  = false;
+        _holdTimer = 0f;
+        _latchedHorizDirWS = Vector3.zero;
 
-    if (playerMovement) playerMovement.SetExternalStopMovement(false);
+        if (playerMovement) playerMovement.SetExternalStopMovement(false);
 
-    SuppressJump(false);
-    var dash = GetComponentInParent<PlayerDash>();
-    dash?.SetDashSuppressed(false);
+        SuppressJump(false);
+        var dash = GetComponentInParent<PlayerDash>();
+        dash?.SetDashSuppressed(false);
 
-    LockFlightEntry(false);
+        LockFlightEntry(false);
 
-    SetBoostAnim(false);
-    cameraBoostFx?.OnChargeCancel();
+        SetBoostAnim(false);
+        cameraBoostFx?.OnChargeCancel();
 
-    // clear and stop speedlines
-    _speedlinesRequested = false;
-    StopSpeedlines();
-}
+        _speedlinesRequested = false;
+        StopSpeedlines();
+    }
+
+    // ─────────────────────────────────────────────────────
+    // Launch
+    // ─────────────────────────────────────────────────────
+    private void Launch()
+    {
+        _charging = false;
+
+        _chargedFlashOn = false;
+        jetpackRare?.SetChargedFlash(false);
+
+        // hide orb + DUST when launching
+        jetpackRare?.SetEnergyBallMeshesVisible(false);
+        jetpackRare?.SetChargeDustVisible(false);
+
+        Vector3 horiz = Vector3.zero;
+
+        if (playerBody)
+        {
+            Vector3 up = GetUp();
+
+            float vMag = Mathf.Max(0f, maxLaunchVertical);
+            float hMag = Mathf.Max(0f, maxLaunchHorizontal);
+
+            // anti-stick: pop up a hair and clear down-velocity
+            PreLaunchSeparation(preLaunchLift);
+            _forceUngroundedUntil = Time.time + Mathf.Max(0.02f, ungroundGrace);
+
+            Vector3 newVel = up * vMag;
+
+            // Build a movement dir from *current* input; if none, use LATCHED
+            Vector3 moveDir;
+            {
+                float h = Input.GetAxisRaw("Horizontal");
+                float v = Input.GetAxisRaw("Vertical");
+
+                if (playerCam)
+                {
+                    Vector3 fwd = Vector3.ProjectOnPlane(playerCam.transform.forward, up).normalized;
+                    Vector3 right = Vector3.ProjectOnPlane(playerCam.transform.right,  up).normalized;
+                    moveDir = (fwd * v + right * h);
+                }
+                else
+                {
+                    moveDir = new Vector3(h, 0f, v);
+                }
+                moveDir = Vector3.ProjectOnPlane(moveDir, up);
+                if (moveDir.sqrMagnitude < 0.0001f && _latchedHorizDirWS.sqrMagnitude > 0.0001f)
+                    moveDir = _latchedHorizDirWS; // ← use latched if current is zero
+            }
+
+            bool hasMoveNow = moveDir.sqrMagnitude > 0.0001f;
+
+            Vector3 horizDir;
+            if (requireMovementInputForHorizontal)
+                horizDir = hasMoveNow ? moveDir.normalized : Vector3.zero;
+            else
+            {
+                Vector3 fallback = Vector3.ProjectOnPlane(transform.forward, up);
+                horizDir = (hasMoveNow ? moveDir : fallback).normalized;
+            }
+
+            if (horizDir.sqrMagnitude > 0.0001f && hMag > 0.001f)
+            {
+                float boostedH = hMag + vMag * Mathf.Max(0f, forwardBoostFromVertical);
+                horiz = horizDir * boostedH;
+                newVel += horiz;
+            }
+
+            // apply in one shot so no other script steals our impulse this frame
+            playerBody.velocity = newVel;
+
+            // preserve that horizontal for a while so movement doesn’t immediately damp it
+            if (playerMovement && horiz.sqrMagnitude > 0.0001f)
+                playerMovement.HoldExternalHorizontal(horiz, 15f);
+
+            cameraBoostFx?.OnLaunch(up);
+            SpawnGroundbreak();
+        }
+
+        if (playerMovement) playerMovement.SetExternalStopMovement(false);
+        if (playerMovement) playerMovement.NotifyJumped();
+
+        SetBoostAnim(true); // keep true until we land in coroutine below
+
+        _speedlinesRequested = true;
+        PlaySpeedlines();
+
+        StartCoroutine(BoostApexAndAfter());
+    }
+
+    private void PreLaunchSeparation(float lift)
+    {
+        if (!playerBody) return;
+        Vector3 up = GetUp();
+
+        // nudge up a bit, and remove any downward velocity
+        playerBody.position += up * Mathf.Max(0f, lift);
+        Vector3 v = playerBody.velocity;
+        float vDown = Vector3.Dot(v, -up);
+        if (vDown > 0f) playerBody.velocity = v + up * vDown;
+    }
 
     private System.Collections.IEnumerator BoostApexAndAfter()
-{
-    const float timeout = 4f;
-    float t = 0f;
-    bool wentUp = false;
-
-    while (t < timeout)
     {
-        yield return null;
-        t += Time.deltaTime;
+        const float timeout = 4f;
+        float t = 0f;
+        bool wentUp = false;
 
-        if (!playerBody) break;
+        while (t < timeout)
+        {
+            yield return null;
+            t += Time.deltaTime;
 
-        Vector3 up = GetUp();
-        float vUp = Vector3.Dot(playerBody.velocity, up);
-        if (vUp > 0.5f) wentUp = true;
-        if (wentUp && vUp <= 0.05f) break;
+            if (!playerBody) break;
+
+            Vector3 up = GetUp();
+            float vUp = Vector3.Dot(playerBody.velocity, up);
+            if (vUp > 0.5f) wentUp = true;
+            if (wentUp && vUp <= 0.05f) break;
+        }
+
+        cameraBoostFx?.OnApex(GetUp());
+
+        if (!lockFlight && playerFlight != null)
+        {
+            if (playerMovement) playerMovement.CancelExternalHorizontalHold();
+
+            LockFlightEntry(false);
+            TryEnterFlight();
+
+            SetBoostAnim(false);
+            cameraBoostFx?.OnLand();
+
+            _speedlinesRequested = false;
+            StopSpeedlines();
+        }
+        else
+        {
+            if (_fallBoostRoutine != null) StopCoroutine(_fallBoostRoutine);
+            _fallBoostRoutine = NoFlightFallBoostUntilGrounded();
+            yield return StartCoroutine(_fallBoostRoutine);
+
+            if (playerMovement) playerMovement.CancelExternalHorizontalHold();
+            SetBoostAnim(false);
+
+            cameraBoostFx?.OnLand();
+
+            _speedlinesRequested = false;
+            StopSpeedlines();
+
+            LockFlightEntry(false);
+
+            SpawnGroundbreak();
+        }
+
+        if (playerJump) playerJump.SetJumpSuppressed(false);
+        var dash = GetComponentInParent<PlayerDash>();
+        dash?.SetDashSuppressed(false);
     }
-
-    cameraBoostFx?.OnApex(GetUp());
-
-    if (!lockFlight && playerFlight != null)
-    {
-        if (playerMovement) playerMovement.CancelExternalHorizontalHold();
-
-        LockFlightEntry(false);
-        TryEnterFlight();
-
-        SetBoostAnim(false);
-        cameraBoostFx?.OnLand(); // if you only want this on true land, move it to the grounded path
-
-        // boost finished → clear request and stop the effect
-        _speedlinesRequested = false;
-        StopSpeedlines();
-    }
-    else
-    {
-        if (_fallBoostRoutine != null) StopCoroutine(_fallBoostRoutine);
-        _fallBoostRoutine = NoFlightFallBoostUntilGrounded();
-        yield return StartCoroutine(_fallBoostRoutine);
-
-        if (playerMovement) playerMovement.CancelExternalHorizontalHold();
-        SetBoostAnim(false);
-
-        cameraBoostFx?.OnLand();
-
-        // boost finished → clear request and stop the effect
-        _speedlinesRequested = false;
-        StopSpeedlines();
-
-        LockFlightEntry(false);
-
-        // Spawn groundbreak only after we actually touched ground.
-        SpawnGroundbreak();
-    }
-
-    SuppressJump(false);
-    var dash = GetComponentInParent<PlayerDash>();
-    dash?.SetDashSuppressed(false);
-}
 
     private System.Collections.IEnumerator NoFlightFallBoostUntilGrounded()
     {
@@ -523,7 +549,6 @@ private void CancelCharge()
 
         if (tryResourcesLoad)
         {
-            // Requires a Resources/FX_groundbreak.prefab
             var res = Resources.Load<GameObject>("FX_groundbreak");
             if (res != null) fxGroundbreakPrefab = res;
         }
@@ -548,8 +573,6 @@ private void CancelCharge()
 
         var fx = Instantiate(fxGroundbreakPrefab, pos, rot);
 
-        // Hand off to the prefab so it can raycast down, align to ground normal,
-        // and inherit the ground material (all inside GroundbreakFXRoot).
         var root = fx.GetComponent<GroundbreakFXRoot>();
         if (root != null)
         {
@@ -557,66 +580,9 @@ private void CancelCharge()
         }
         else
         {
-            // Fallback: we already snapped to ground via our raycast.
             fx.transform.position = pos;
             fx.transform.rotation = rot;
         }
-    }
-
-    Material GetGroundMaterialUnderPlayer(Vector3 origin, Vector3 up, float rayLen = 3f)
-    {
-        if (!Physics.Raycast(origin, -up, out var hit, rayLen, ~0, QueryTriggerInteraction.Ignore))
-            return null;
-
-        // Terrain → synthesize a material from TerrainLayer (dominant)
-        var terrain = hit.collider.GetComponent<Terrain>();
-        if (terrain != null && terrain.terrainData != null)
-        {
-            var td = terrain.terrainData;
-            Vector3 local = hit.point - terrain.transform.position;
-            float u = Mathf.InverseLerp(0f, td.size.x, local.x);
-            float v = Mathf.InverseLerp(0f, td.size.z, local.z);
-
-            int sx = Mathf.Clamp(Mathf.RoundToInt(u * (td.alphamapWidth  - 1)), 0, td.alphamapWidth  - 1);
-            int sy = Mathf.Clamp(Mathf.RoundToInt(v * (td.alphamapHeight - 1)), 0, td.alphamapHeight - 1);
-            float[,,] alpha = td.GetAlphamaps(sx, sy, 1, 1);
-
-            int best = 0; float bestW = 0f;
-            for (int l = 0; l < td.alphamapLayers; l++)
-            {
-                float w = alpha[0,0,l];
-                if (w > bestW) { bestW = w; best = l; }
-            }
-
-            var layer = (best >= 0 && best < td.terrainLayers.Length) ? td.terrainLayers[best] : null;
-            if (layer != null)
-            {
-                // Build a lightweight URP/Lit material that matches the layer’s look
-                var lit = Shader.Find("Universal Render Pipeline/Lit");
-                if (lit == null) return null;
-                var m = new Material(lit) { name = (layer.diffuseTexture ? layer.diffuseTexture.name : "TerrainLayer") + " (Clone)" };
-                if (layer.diffuseTexture) m.SetTexture("_BaseMap", layer.diffuseTexture);
-                m.SetColor("_BaseColor", Color.white);
-                // Set tiling roughly from tileSize in world space → UV tiling estimate
-                Vector2 tiling = new Vector2(
-                    td.size.x / Mathf.Max(0.0001f, layer.tileSize.x),
-                    td.size.z / Mathf.Max(0.0001f, layer.tileSize.y)
-                );
-                m.SetTextureScale("_BaseMap", tiling);
-                m.SetTextureOffset("_BaseMap", layer.tileOffset);
-                return m;
-            }
-        }
-
-        // MeshRenderer → clone its sharedMaterial to keep it independent
-        var rend = hit.collider.GetComponent<Renderer>();
-        if (rend != null && rend.sharedMaterial != null)
-        {
-            var clone = new Material(rend.sharedMaterial) { name = rend.sharedMaterial.name + " (Clone)" };
-            return clone;
-        }
-
-        return null;
     }
 
     // ── helpers (existing) ──
@@ -704,63 +670,63 @@ private void CancelCharge()
     }
 
     private void AlignSpeedlinesTowardCamera()
-{
-    if (_speedlinesXform == null || _camXform == null) return;
-
-    // In first person: keep them off, but DO NOT clear the request flag.
-    if (IsFirstPersonView())
     {
-        if (speedlines != null && speedlines.isPlaying)
-            speedlines.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
-        return;
+        if (_speedlinesXform == null || _camXform == null) return;
+
+        // In first person: keep them off, but DO NOT clear the request flag.
+        if (IsFirstPersonView())
+        {
+            if (speedlines != null && speedlines.isPlaying)
+                speedlines.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+            return;
+        }
+
+        // Back in third person: if a boost is ongoing and the effect is stopped, resume it.
+        if (_speedlinesRequested && speedlines != null && !speedlines.isPlaying)
+            speedlines.Play(true);
+
+        // Normal look-at alignment
+        Vector3 toCam = _camXform.position - _speedlinesXform.position;
+        if (toCam.sqrMagnitude < 1e-6f) return;
+
+        Vector3 upRef = speedlinesMatchCameraRoll ? _camXform.up : Vector3.up;
+
+        Quaternion look = Quaternion.LookRotation(toCam.normalized, upRef);
+        look *= Quaternion.Euler(speedlinesLookOffsetEuler);
+
+        _speedlinesXform.rotation = look;
     }
-
-    // Back in third person: if a boost is ongoing and the effect is stopped, resume it.
-    if (_speedlinesRequested && speedlines != null && !speedlines.isPlaying)
-        speedlines.Play(true);
-
-    // Normal look-at alignment
-    Vector3 toCam = _camXform.position - _speedlinesXform.position;
-    if (toCam.sqrMagnitude < 1e-6f) return;
-
-    Vector3 upRef = speedlinesMatchCameraRoll ? _camXform.up : Vector3.up;
-
-    Quaternion look = Quaternion.LookRotation(toCam.normalized, upRef);
-    look *= Quaternion.Euler(speedlinesLookOffsetEuler);
-
-    _speedlinesXform.rotation = look;
-}
 
     private void PlaySpeedlines()
-{
-    EnsureSpeedlinesBound();
-    EnsureCameraTransform();
-    if (speedlines == null) return;
-
-    // In first person we *want* them hidden but keep the request true
-    if (IsFirstPersonView())
     {
-        if (speedlines.isPlaying)
-            speedlines.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
-        return;
+        EnsureSpeedlinesBound();
+        EnsureCameraTransform();
+        if (speedlines == null) return;
+
+        // In first person we *want* them hidden but keep the request true
+        if (IsFirstPersonView())
+        {
+            if (speedlines.isPlaying)
+                speedlines.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+            return;
+        }
+
+        if (!speedlines.isPlaying) speedlines.Play(true);
     }
 
-    if (!speedlines.isPlaying) speedlines.Play(true);
-}
-
     private void StopSpeedlines()
-{
-    if (speedlines == null) return;
-    speedlines.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
-}
+    {
+        if (speedlines == null) return;
+        speedlines.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+    }
 
-// Helper: are we currently in first-person view?
-private bool IsFirstPersonView()
-{
-    var rig = GetComponentInParent<PlayerCamera>(true);
-    if (!rig) rig = FindObjectOfType<PlayerCamera>(true);
-    return rig != null && rig.IsInFirstPerson;
-}
+    // Helper: are we currently in first-person view?
+    private bool IsFirstPersonView()
+    {
+        var rig = GetComponentInParent<PlayerCamera>(true);
+        if (!rig) rig = FindObjectOfType<PlayerCamera>(true);
+        return rig != null && rig.IsInFirstPerson;
+    }
 
     private void SuppressJump(bool on)
     {
@@ -769,6 +735,8 @@ private bool IsFirstPersonView()
 
     private bool IsGrounded()
     {
+        if (Time.time < _forceUngroundedUntil) return false; // grace after launch
+
         if (playerMovement) return playerMovement.IsGrounded();
 
         if (!playerBody) return false;
@@ -815,7 +783,7 @@ private bool IsFirstPersonView()
         catch { /* ignore */ }
     }
 
-    // Animator utilities (unchanged)
+    // Animator utilities
     private void EnsureAnimator()
     {
         if (AnimatorHasBool(characterAnimator, isBoostJumpParam))
@@ -851,7 +819,7 @@ private bool IsFirstPersonView()
 
         _animHasParam = false;
         _cachedController = null;
-        if (animatorDebugLogs) Debug.LogWarning($"[BoostJump] Could not find an Animator with bool '{isBoostJumpParam}'. Assign one on {name}.", this);
+        if (animatorDebugLogs) Debug.LogWarning($"[BoostJump] Could not find an Animator with bool '{isBoostJumpParam}'.", this);
     }
 
     private static bool AnimatorHasBool(Animator a, string paramName)
@@ -878,7 +846,7 @@ private bool IsFirstPersonView()
         characterAnimator.SetBool(isBoostJumpParam, on);
 
         if (animatorDebugLogs)
-            Debug.Log($"[BoostJump] Set '{isBoostJumpParam}' = {on} on Animator '{characterAnimator.name}'.", this);
+            Debug.Log($"[BoostJump] Set '{isBoostJumpParam}' = {on} on Animator '{characterAnimator?.name}'.", this);
     }
 
 #if UNITY_EDITOR
@@ -887,13 +855,15 @@ private bool IsFirstPersonView()
         chargeTimeSeconds    = Mathf.Max(0f, chargeTimeSeconds);
         maxLaunchVertical    = Mathf.Max(0f, maxLaunchVertical);
         maxLaunchHorizontal  = Mathf.Max(0f, maxLaunchHorizontal);
-
+        forwardBoostFromVertical = Mathf.Clamp(forwardBoostFromVertical, 0f, 1.5f);
+        preLaunchLift        = Mathf.Max(0f, preLaunchLift);
+        ungroundGrace        = Mathf.Max(0f, ungroundGrace);
         fallAccelMax         = Mathf.Max(0f, fallAccelMax);
         fallAccelRampTime    = Mathf.Max(0f, fallAccelRampTime);
     }
 #endif
 
-    // Flight entry locker (unchanged from your version)
+    // Flight entry locker (unchanged)
     private void LockFlightEntry(bool on)
     {
         if (playerFlight == null)
