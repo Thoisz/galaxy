@@ -19905,7 +19905,7 @@ GameObject:
   - component: {fileID: 5902123412614881050}
   - component: {fileID: 5022372513964740360}
   - component: {fileID: 3319910013019081005}
-  - component: {fileID: 6236535222135059316}
+  - component: {fileID: 7276510750590217346}
   m_Layer: 13
   m_Name: jetpackrare
   m_TagString: Untagged
@@ -19981,7 +19981,7 @@ MonoBehaviour:
   lowFuelPercent: 0.15
   detectSuperByReflection: 1
   superSpeedVelocityThreshold: 0
-  fuelBarPrefab: {fileID: 1939639661689701276, guid: 1432da527a0f846478f3a939a06995c2, type: 3}
+  fuelBarPrefab: {fileID: 2291354162396851291, guid: d3c22c7eaa3f9ce4795baa7d3c36c570, type: 3}
   hudCanvas: {fileID: 0}
   destroyBarOnDisable: 1
 --- !u!114 &5022372513964740360
@@ -20030,7 +20030,7 @@ MonoBehaviour:
   holeScaleShrinkDuration: 1
   chargesRoot: {fileID: 0}
   holesForced: 0
---- !u!114 &6236535222135059316
+--- !u!114 &7276510750590217346
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -20046,14 +20046,13 @@ MonoBehaviour:
   playerBody: {fileID: 0}
   playerCam: {fileID: 0}
   gravityBody: {fileID: 0}
-  playerCrouch: {fileID: 0}
   playerMovement: {fileID: 0}
   playerJump: {fileID: 0}
   cameraBoostFx: {fileID: 0}
   debugFxBinding: 0
   characterAnimator: {fileID: 0}
-  isBoostJumpParam: isBoostJump
   animatorDebugLogs: 0
+  crouchKey: 304
   triggerKey: 32
   chargeTimeSeconds: 2
   maxLaunchVertical: 100
@@ -20079,22 +20078,22 @@ MonoBehaviour:
       inWeight: 0
       outWeight: 0
     - serializedVersion: 3
-      time: 1.0813302
-      value: 0.028117895
-      inSlope: 0.011098765
-      outSlope: 0.011098765
+      time: 0.9717829
+      value: 0.08417715
+      inSlope: 0.4083232
+      outSlope: 0.4083232
       tangentMode: 0
       weightedMode: 0
-      inWeight: 0.19491339
-      outWeight: 0.57322127
+      inWeight: 0.1480267
+      outWeight: 0.39789787
     - serializedVersion: 3
-      time: 1.0916748
+      time: 1
       value: 1
-      inSlope: 3.18396
-      outSlope: 3.18396
+      inSlope: 0
+      outSlope: 0
       tangentMode: 0
       weightedMode: 0
-      inWeight: 0.03333336
+      inWeight: 0
       outWeight: 0
     m_PreInfinity: 2
     m_PostInfinity: 2

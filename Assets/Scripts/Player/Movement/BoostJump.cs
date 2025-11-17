@@ -5,12 +5,15 @@ using UnityEngine;
 [DefaultExecutionOrder(-100)] // run BEFORE PlayerJump so we can block the Space down-frame
 public class BoostJump : MonoBehaviour
 {
+    // Animator parameter names (must match your Animator)
+    private const string CrouchParamName = "isBoostCrouching";
+    private const string BoostParamName  = "isBoostJumping";
+
     [Header("Auto-find (from parents)")]
     [SerializeField] private PlayerFlight   playerFlight;   // optional
     [SerializeField] private Rigidbody      playerBody;
     [SerializeField] private Camera         playerCam;      // for passing base FOV to FX
     [SerializeField] private Component      gravityBody;    // something exposing gravity direction (e.g., GravityBody)
-    [SerializeField] private PlayerCrouch   playerCrouch;
     [SerializeField] private PlayerMovement playerMovement;
     [SerializeField] private PlayerJump     playerJump;     // to suppress normal jumps
 
@@ -18,13 +21,13 @@ public class BoostJump : MonoBehaviour
     [SerializeField] private CameraBoostFX cameraBoostFx;   // optional; will be auto-found if left empty
     [SerializeField] private bool debugFxBinding = false;
 
-    [Header("Animator (optional)")]
+    [Header("Animator (auto from PlayerMovement)")]
     [SerializeField] private Animator characterAnimator;
-    [SerializeField] private string   isBoostJumpParam = "isBoostJump";
-    [SerializeField] private bool     animatorDebugLogs = false;
+    [SerializeField] private bool animatorDebugLogs = false;
 
     [Header("Input")]
-    [SerializeField] private KeyCode triggerKey = KeyCode.Space; // pressed with crouch
+    [SerializeField] private KeyCode crouchKey  = KeyCode.LeftShift; // held to crouch
+    [SerializeField] private KeyCode triggerKey = KeyCode.Space;     // pressed with crouch to charge
 
     [Header("Charge")]
     [Tooltip("Time to hold Space (with crouch) before launch becomes available.")]
@@ -84,10 +87,6 @@ public class BoostJump : MonoBehaviour
     private bool _prevCrouchHeld = false;
     private bool _prevSpaceHeld  = false;
 
-    // animator cache
-    private bool _animHasParam = false;
-    private RuntimeAnimatorController _cachedController = null;
-
     // fall-boost coroutine handle
     private System.Collections.IEnumerator _fallBoostRoutine;
 
@@ -105,21 +104,44 @@ public class BoostJump : MonoBehaviour
     // Grounding grace
     private float _forceUngroundedUntil = 0f;
 
-    // LATCHED INPUT: stores raw camera-planar input while charging (ignores external stop)
+    // LATCHED INPUT: stores raw camera-planar input while charging
     private Vector3 _latchedHorizDirWS = Vector3.zero;
 
-    // ── lifecycle ──
+    // Crouch / boost state
+    private bool _isCrouching     = false;
+    private bool _boostPoseActive = false;
+
+    // Animator cached
+    private int  _crouchParamHash = -1;
+    private int  _boostParamHash  = -1;
+    private bool _animInitialized = false;
+    private bool _hasCrouchParam  = false;
+    private bool _hasBoostParam   = false;
+
+    // ─────────────────────────────────────────────────────
+    // lifecycle
+    // ─────────────────────────────────────────────────────
     private void Awake()
     {
-        if (!playerFlight)   playerFlight   = GetComponentInParent<PlayerFlight>();
-        if (!playerBody)     playerBody     = GetComponentInParent<Rigidbody>();
-        if (!playerCrouch)   playerCrouch   = GetComponentInParent<PlayerCrouch>();
-        if (!playerMovement) playerMovement = GetComponentInParent<PlayerMovement>();
-        if (!playerJump)     playerJump     = GetComponentInParent<PlayerJump>();
+        // Find the *real* player root via PlayerMovement.
+        if (!playerMovement) playerMovement = GetComponentInParent<PlayerMovement>(true);
+
+        // If there is no PlayerMovement above us, this is probably the portrait/accessory preview.
+        if (!playerMovement)
+        {
+            if (animatorDebugLogs)
+                Debug.Log("[BoostJump] No PlayerMovement found in parents; disabling BoostJump on this instance.", this);
+            enabled = false;
+            return;
+        }
+
+        if (!playerFlight) playerFlight = playerMovement.GetComponent<PlayerFlight>();
+        if (!playerBody)   playerBody   = playerMovement.GetComponent<Rigidbody>();
+        if (!playerJump)   playerJump   = playerMovement.GetComponent<PlayerJump>();
 
         if (!playerCam)
         {
-            var rig = GetComponentInParent<PlayerCamera>(true);
+            var rig = playerMovement.GetComponentInChildren<PlayerCamera>(true);
             if (rig)
             {
                 var camInRig = rig.GetComponentInChildren<Camera>(true);
@@ -128,7 +150,7 @@ public class BoostJump : MonoBehaviour
             if (!playerCam && Camera.main) playerCam = Camera.main;
         }
 
-        if (!gravityBody) gravityBody = GetComponentInParent<GravityBody>();
+        if (!gravityBody) gravityBody = playerMovement.GetComponent<GravityBody>();
         if (gravityBody)
         {
             _miGetGravityDir = gravityBody.GetType().GetMethod(
@@ -148,36 +170,45 @@ public class BoostJump : MonoBehaviour
         if (!jetpackRare) jetpackRare = GetComponentInParent<JetpackRare>(true);
         jetpackRare?.SetChargedFlash(false);
 
-        TryBindCameraBoostFx();
+        // Auto-find animator from PlayerMovement root if not already set.
+        if (!characterAnimator)
+            characterAnimator = playerMovement.GetComponentInChildren<Animator>(true);
 
+        InitAnimator();
+
+        TryBindCameraBoostFx();
         EnsureSpeedlinesBound();
         EnsureCameraTransform();
-
-        EnsureAnimator();
-        SetBoostAnim(false);
-
         EnsureGroundbreakPrefabBound();
     }
 
     private void OnEnable()
     {
+        if (!enabled) return;
+
         if (!cameraBoostFx) TryBindCameraBoostFx();
         EnsureSpeedlinesBound();
         EnsureCameraTransform();
         EnsureGroundbreakPrefabBound();
 
-        if (!jetpackRare) jetpackRare = GetComponentInParent<JetpackRare>();
+        if (!jetpackRare) jetpackRare = GetComponentInParent<JetpackRare>(true);
+
+        if (!_animInitialized) InitAnimator();
     }
 
     private void OnDisable()
     {
+        if (!enabled) return;
+
         _chargedFlashOn = false;
         jetpackRare?.SetChargedFlash(false);
         jetpackRare?.SetEnergyBallMeshesVisible(false);
 
-        _charging  = false;
-        _holdTimer = 0f;
+        _charging        = false;
+        _holdTimer       = 0f;
         _latchedHorizDirWS = Vector3.zero;
+        _isCrouching     = false;
+        _boostPoseActive = false;
 
         if (playerMovement)
         {
@@ -188,7 +219,9 @@ public class BoostJump : MonoBehaviour
 
         LockFlightEntry(false);
 
+        SetCrouchAnim(false);
         SetBoostAnim(false);
+
         cameraBoostFx?.OnChargeCancel();
 
         _speedlinesRequested = false;
@@ -197,22 +230,40 @@ public class BoostJump : MonoBehaviour
 
     private void Update()
     {
+        if (!enabled) return;
+
         if (playerFlight && playerFlight.IsFlying)
             CancelCharge();
 
         bool grounded   = playerMovement ? playerMovement.IsGrounded() : IsGrounded();
-        bool crouchHeld = playerCrouch && playerCrouch.IsCrouching;
+        bool crouchHeld = Input.GetKey(crouchKey);
         bool spaceHeld  = Input.GetKey(triggerKey);
 
-        bool wantsCharge = grounded && crouchHeld && spaceHeld;
+        // ───────── Crouch ─────────
+        bool shouldCrouch = grounded && crouchHeld;
 
-        if (!_charging)
+        if (shouldCrouch)
         {
-            if (wantsCharge) StartCharge(crouchHeld, spaceHeld);
+            if (!_isCrouching)
+                EnterCrouch();
         }
         else
         {
-            // LATCH raw input every frame while charging (even though we externally stop movement)
+            if (_isCrouching && !_charging)
+                ExitCrouch();
+        }
+
+        // ───────── Charge ─────────
+        bool wantsCharge = grounded && _isCrouching && spaceHeld;
+
+        if (!_charging)
+        {
+            if (wantsCharge)
+                StartCharge(crouchHeld, spaceHeld);
+        }
+        else
+        {
+            // latch movement dir while charging
             Vector3 up = GetUp();
             float h = Input.GetAxisRaw("Horizontal");
             float v = Input.GetAxisRaw("Vertical");
@@ -226,7 +277,9 @@ public class BoostJump : MonoBehaviour
             bool releasedSpaceThisFrame  = _prevSpaceHeld  && !spaceHeld;
 
             if (releasedCrouchThisFrame)
+            {
                 CancelCharge();
+            }
             else if (releasedSpaceThisFrame)
             {
                 if (_holdTimer >= chargeTimeSeconds) Launch();
@@ -244,25 +297,31 @@ public class BoostJump : MonoBehaviour
 
     private void FixedUpdate()
     {
+        if (!enabled) return;
+
+        // keep movement fully locked while crouching or charging
+        if (_isCrouching || _charging)
+        {
+            if (playerMovement)
+                playerMovement.SetExternalStopMovement(true);
+
+            if (playerBody)
+            {
+                Vector3 up   = GetUp();
+                Vector3 v    = playerBody.velocity;
+                Vector3 vert = Vector3.Project(v, up);
+                playerBody.velocity = vert; // kill horizontal
+            }
+        }
+
         if (!_charging) return;
 
         _holdTimer += Time.fixedDeltaTime;
 
-        if (playerBody)
-        {
-            Vector3 up   = GetUp();
-            Vector3 v    = playerBody.velocity;
-            Vector3 vert = Vector3.Project(v, up);
-            playerBody.velocity = vert; // freeze horizontal while charging
-        }
-
-        // normalized charge 0..1
         float t = chargeTimeSeconds <= 0f ? 1f : Mathf.Clamp01(_holdTimer / chargeTimeSeconds);
 
-        // update camera FX
         if (cameraBoostFx) cameraBoostFx.OnChargeProgress(t);
 
-        // fully charged?
         bool nowFull = (t >= 1f - 1e-4f);
         if (nowFull != _chargedFlashOn)
         {
@@ -275,12 +334,96 @@ public class BoostJump : MonoBehaviour
 
     private void LateUpdate()
     {
+        if (!enabled) return;
+
         if (_camXform == null) EnsureCameraTransform();
         AlignSpeedlinesTowardCamera();
     }
 
     // ─────────────────────────────────────────────────────
-    // Start/Cancel charge (missing earlier)
+    // Animator helpers (no layer weight changes)
+    // ─────────────────────────────────────────────────────
+    private void InitAnimator()
+    {
+        if (!characterAnimator)
+        {
+            if (animatorDebugLogs)
+                Debug.LogWarning("[BoostJump] No Animator found via PlayerMovement; animations will be skipped on this instance.", this);
+            _animInitialized = false;
+            return;
+        }
+
+        _crouchParamHash = Animator.StringToHash(CrouchParamName);
+        _boostParamHash  = Animator.StringToHash(BoostParamName);
+
+        _hasCrouchParam = HasBoolParam(characterAnimator, CrouchParamName);
+        _hasBoostParam  = HasBoolParam(characterAnimator, BoostParamName);
+
+        if (animatorDebugLogs)
+        {
+            Debug.Log($"[BoostJump] Animator '{characterAnimator.name}' init. hasCrouch={_hasCrouchParam}, hasBoost={_hasBoostParam}", this);
+        }
+
+        _animInitialized = _hasCrouchParam && _hasBoostParam;
+    }
+
+    private static bool HasBoolParam(Animator anim, string name)
+    {
+        if (!anim || anim.runtimeAnimatorController == null) return false;
+        foreach (var p in anim.parameters)
+            if (p.type == AnimatorControllerParameterType.Bool && p.name == name)
+                return true;
+        return false;
+    }
+
+    private void SetCrouchAnim(bool on)
+    {
+        if (!_animInitialized || !_hasCrouchParam) return;
+        characterAnimator.SetBool(_crouchParamHash, on);
+    }
+
+    private void SetBoostAnim(bool on)
+    {
+        if (!_animInitialized || !_hasBoostParam) return;
+
+        _boostPoseActive = on;
+        characterAnimator.SetBool(_boostParamHash, on);
+    }
+
+    // ─────────────────────────────────────────────────────
+    // Crouch helpers
+    // ─────────────────────────────────────────────────────
+    private void EnterCrouch()
+    {
+        _isCrouching = true;
+
+        if (playerMovement)
+            playerMovement.SetExternalStopMovement(true);
+
+        // kill horizontal immediately
+        if (playerBody)
+        {
+            Vector3 up = GetUp();
+            Vector3 v  = playerBody.velocity;
+            Vector3 vert = Vector3.Project(v, up);
+            playerBody.velocity = vert;
+        }
+
+        SetCrouchAnim(true);
+    }
+
+    private void ExitCrouch()
+    {
+        _isCrouching = false;
+
+        if (!_charging && playerMovement)
+            playerMovement.SetExternalStopMovement(false);
+
+        SetCrouchAnim(false);
+    }
+
+    // ─────────────────────────────────────────────────────
+    // Start/Cancel charge
     // ─────────────────────────────────────────────────────
     private void StartCharge(bool crouchHeldNow, bool spaceHeldNow)
     {
@@ -295,11 +438,10 @@ public class BoostJump : MonoBehaviour
         {
             Vector3 up   = GetUp();
             Vector3 vert = Vector3.Project(playerBody.velocity, up);
-            playerBody.velocity = vert; // kill horizontal while charging
+            playerBody.velocity = vert;
         }
 
-        if (playerMovement) playerMovement.SetExternalStopMovement(true);
-        SuppressJump(true);
+        if (playerJump) playerJump.SetJumpSuppressed(true);
         var dash = GetComponentInParent<PlayerDash>();
         dash?.SetDashSuppressed(true);
 
@@ -310,9 +452,11 @@ public class BoostJump : MonoBehaviour
 
         cameraBoostFx?.OnChargeProgress(0f);
 
-        // show energyball + DUST while charging
         jetpackRare?.SetEnergyBallMeshesVisible(true);
         jetpackRare?.SetChargeDustVisible(true);
+
+        // Boost pose not yet, only when we actually launch.
+        SetBoostAnim(false);
     }
 
     private void CancelCharge()
@@ -320,7 +464,6 @@ public class BoostJump : MonoBehaviour
         _chargedFlashOn = false;
         jetpackRare?.SetChargedFlash(false);
 
-        // hide orb + DUST when not charging
         jetpackRare?.SetEnergyBallMeshesVisible(false);
         jetpackRare?.SetChargeDustVisible(false);
 
@@ -330,19 +473,21 @@ public class BoostJump : MonoBehaviour
         _holdTimer = 0f;
         _latchedHorizDirWS = Vector3.zero;
 
-        if (playerMovement) playerMovement.SetExternalStopMovement(false);
+        if (!_isCrouching && playerMovement)
+            playerMovement.SetExternalStopMovement(false);
 
-        SuppressJump(false);
+        if (playerJump) playerJump.SetJumpSuppressed(false);
         var dash = GetComponentInParent<PlayerDash>();
         dash?.SetDashSuppressed(false);
 
         LockFlightEntry(false);
 
-        SetBoostAnim(false);
         cameraBoostFx?.OnChargeCancel();
 
         _speedlinesRequested = false;
         StopSpeedlines();
+
+        SetBoostAnim(false);
     }
 
     // ─────────────────────────────────────────────────────
@@ -355,9 +500,14 @@ public class BoostJump : MonoBehaviour
         _chargedFlashOn = false;
         jetpackRare?.SetChargedFlash(false);
 
-        // hide orb + DUST when launching
         jetpackRare?.SetEnergyBallMeshesVisible(false);
         jetpackRare?.SetChargeDustVisible(false);
+
+        if (_isCrouching)
+        {
+            _isCrouching = false;
+            SetCrouchAnim(false);
+        }
 
         Vector3 horiz = Vector3.zero;
 
@@ -368,13 +518,12 @@ public class BoostJump : MonoBehaviour
             float vMag = Mathf.Max(0f, maxLaunchVertical);
             float hMag = Mathf.Max(0f, maxLaunchHorizontal);
 
-            // anti-stick: pop up a hair and clear down-velocity
             PreLaunchSeparation(preLaunchLift);
             _forceUngroundedUntil = Time.time + Mathf.Max(0.02f, ungroundGrace);
 
             Vector3 newVel = up * vMag;
 
-            // Build a movement dir from *current* input; if none, use LATCHED
+            // Build a movement dir from *current* input; if none, use latched
             Vector3 moveDir;
             {
                 float h = Input.GetAxisRaw("Horizontal");
@@ -392,7 +541,7 @@ public class BoostJump : MonoBehaviour
                 }
                 moveDir = Vector3.ProjectOnPlane(moveDir, up);
                 if (moveDir.sqrMagnitude < 0.0001f && _latchedHorizDirWS.sqrMagnitude > 0.0001f)
-                    moveDir = _latchedHorizDirWS; // ← use latched if current is zero
+                    moveDir = _latchedHorizDirWS;
             }
 
             bool hasMoveNow = moveDir.sqrMagnitude > 0.0001f;
@@ -413,10 +562,8 @@ public class BoostJump : MonoBehaviour
                 newVel += horiz;
             }
 
-            // apply in one shot so no other script steals our impulse this frame
             playerBody.velocity = newVel;
 
-            // preserve that horizontal for a while so movement doesn’t immediately damp it
             if (playerMovement && horiz.sqrMagnitude > 0.0001f)
                 playerMovement.HoldExternalHorizontal(horiz, 15f);
 
@@ -424,10 +571,14 @@ public class BoostJump : MonoBehaviour
             SpawnGroundbreak();
         }
 
-        if (playerMovement) playerMovement.SetExternalStopMovement(false);
-        if (playerMovement) playerMovement.NotifyJumped();
+        if (playerMovement)
+        {
+            playerMovement.SetExternalStopMovement(false); // allow air control again
+            playerMovement.NotifyJumped();
+        }
 
-        SetBoostAnim(true); // keep true until we land in coroutine below
+        // Turn on boost pose for the boost duration
+        SetBoostAnim(true);
 
         _speedlinesRequested = true;
         PlaySpeedlines();
@@ -440,7 +591,6 @@ public class BoostJump : MonoBehaviour
         if (!playerBody) return;
         Vector3 up = GetUp();
 
-        // nudge up a bit, and remove any downward velocity
         playerBody.position += up * Mathf.Max(0f, lift);
         Vector3 v = playerBody.velocity;
         float vDown = Vector3.Dot(v, -up);
@@ -475,7 +625,6 @@ public class BoostJump : MonoBehaviour
             LockFlightEntry(false);
             TryEnterFlight();
 
-            SetBoostAnim(false);
             cameraBoostFx?.OnLand();
 
             _speedlinesRequested = false;
@@ -488,7 +637,6 @@ public class BoostJump : MonoBehaviour
             yield return StartCoroutine(_fallBoostRoutine);
 
             if (playerMovement) playerMovement.CancelExternalHorizontalHold();
-            SetBoostAnim(false);
 
             cameraBoostFx?.OnLand();
 
@@ -499,6 +647,9 @@ public class BoostJump : MonoBehaviour
 
             SpawnGroundbreak();
         }
+
+        // Done boosting/falling → turn off boost pose
+        SetBoostAnim(false);
 
         if (playerJump) playerJump.SetJumpSuppressed(false);
         var dash = GetComponentInParent<PlayerDash>();
@@ -535,15 +686,14 @@ public class BoostJump : MonoBehaviour
 
     // ── Groundbreak spawn + material handoff ──
 
-    void EnsureGroundbreakPrefabBound()
+    private void EnsureGroundbreakPrefabBound()
     {
         if (fxGroundbreakPrefab != null) return;
 
-        // Try Find in-scene first (disabled templates)
         var go = GameObject.Find("FX_groundbreak");
         if (go != null && go.scene.IsValid())
         {
-            fxGroundbreakPrefab = go; // will instantiate this scene object (acts like a prefab)
+            fxGroundbreakPrefab = go;
             return;
         }
 
@@ -554,16 +704,15 @@ public class BoostJump : MonoBehaviour
         }
     }
 
-    void SpawnGroundbreak()
+    private void SpawnGroundbreak()
     {
         if (fxGroundbreakPrefab == null || playerBody == null) return;
 
         Vector3 up  = GetUp();
 
-        // Safety: only spawn if there is ground reasonably close below us.
         const float maxRayDist = 20f;
         if (!Physics.Raycast(playerBody.position + up * 0.1f, -up, out var hit, maxRayDist, ~0, QueryTriggerInteraction.Ignore))
-            return; // no ground under us → don't spawn
+            return;
 
         Vector3 pos = hit.point;
         Quaternion rot = Quaternion.LookRotation(
@@ -585,7 +734,7 @@ public class BoostJump : MonoBehaviour
         }
     }
 
-    // ── helpers (existing) ──
+    // ── helpers ──
 
     private void TryBindCameraBoostFx()
     {
@@ -673,7 +822,6 @@ public class BoostJump : MonoBehaviour
     {
         if (_speedlinesXform == null || _camXform == null) return;
 
-        // In first person: keep them off, but DO NOT clear the request flag.
         if (IsFirstPersonView())
         {
             if (speedlines != null && speedlines.isPlaying)
@@ -681,11 +829,9 @@ public class BoostJump : MonoBehaviour
             return;
         }
 
-        // Back in third person: if a boost is ongoing and the effect is stopped, resume it.
         if (_speedlinesRequested && speedlines != null && !speedlines.isPlaying)
             speedlines.Play(true);
 
-        // Normal look-at alignment
         Vector3 toCam = _camXform.position - _speedlinesXform.position;
         if (toCam.sqrMagnitude < 1e-6f) return;
 
@@ -703,7 +849,6 @@ public class BoostJump : MonoBehaviour
         EnsureCameraTransform();
         if (speedlines == null) return;
 
-        // In first person we *want* them hidden but keep the request true
         if (IsFirstPersonView())
         {
             if (speedlines.isPlaying)
@@ -720,7 +865,6 @@ public class BoostJump : MonoBehaviour
         speedlines.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
     }
 
-    // Helper: are we currently in first-person view?
     private bool IsFirstPersonView()
     {
         var rig = GetComponentInParent<PlayerCamera>(true);
@@ -728,14 +872,9 @@ public class BoostJump : MonoBehaviour
         return rig != null && rig.IsInFirstPerson;
     }
 
-    private void SuppressJump(bool on)
-    {
-        if (playerJump) playerJump.SetJumpSuppressed(on);
-    }
-
     private bool IsGrounded()
     {
-        if (Time.time < _forceUngroundedUntil) return false; // grace after launch
+        if (Time.time < _forceUngroundedUntil) return false;
 
         if (playerMovement) return playerMovement.IsGrounded();
 
@@ -781,72 +920,6 @@ public class BoostJump : MonoBehaviour
                 _miEnterFlight.Invoke(playerFlight, null);
         }
         catch { /* ignore */ }
-    }
-
-    // Animator utilities
-    private void EnsureAnimator()
-    {
-        if (AnimatorHasBool(characterAnimator, isBoostJumpParam))
-        {
-            _animHasParam = true;
-            _cachedController = characterAnimator.runtimeAnimatorController;
-            return;
-        }
-
-        foreach (var a in GetComponentsInParent<Animator>(true))
-        {
-            if (AnimatorHasBool(a, isBoostJumpParam))
-            {
-                characterAnimator = a;
-                _animHasParam = true;
-                _cachedController = a.runtimeAnimatorController;
-                if (animatorDebugLogs) Debug.Log($"[BoostJump] Bound Animator '{a.name}' with bool '{isBoostJumpParam}'.", this);
-                return;
-            }
-        }
-
-        foreach (var a in GetComponentsInChildren<Animator>(true))
-        {
-            if (AnimatorHasBool(a, isBoostJumpParam))
-            {
-                characterAnimator = a;
-                _animHasParam = true;
-                _cachedController = a.runtimeAnimatorController;
-                if (animatorDebugLogs) Debug.Log($"[BoostJump] Bound Animator '{a.name}' with bool '{isBoostJumpParam}'.", this);
-                return;
-            }
-        }
-
-        _animHasParam = false;
-        _cachedController = null;
-        if (animatorDebugLogs) Debug.LogWarning($"[BoostJump] Could not find an Animator with bool '{isBoostJumpParam}'.", this);
-    }
-
-    private static bool AnimatorHasBool(Animator a, string paramName)
-    {
-        if (!a || a.runtimeAnimatorController == null) return false;
-        var ps = a.parameters;
-        for (int i = 0; i < ps.Length; i++)
-            if (ps[i].type == AnimatorControllerParameterType.Bool && ps[i].name == paramName)
-                return true;
-        return false;
-    }
-
-    private void SetBoostAnim(bool on)
-    {
-        if (characterAnimator == null ||
-            characterAnimator.runtimeAnimatorController != _cachedController ||
-            !_animHasParam)
-        {
-            EnsureAnimator();
-        }
-
-        if (!_animHasParam) return;
-
-        characterAnimator.SetBool(isBoostJumpParam, on);
-
-        if (animatorDebugLogs)
-            Debug.Log($"[BoostJump] Set '{isBoostJumpParam}' = {on} on Animator '{characterAnimator?.name}'.", this);
     }
 
 #if UNITY_EDITOR

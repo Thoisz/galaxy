@@ -4943,6 +4943,10 @@ MonoBehaviour:
   inheritGroundMaterial: 1
   forceTransparentForURP: 1
   slabMaterialIndex: -1
+  spook:
+    enableSpookStyle: 1
+    spookShader: {fileID: -6465566751694194690, guid: dbd0aaa74f878b447b31239e4d1c8fd3, type: 3}
+    zeroOtherStrengths: 1
   groundMask:
     serializedVersion: 2
     m_Bits: 9
@@ -19691,6 +19695,7 @@ MonoBehaviour:
   fadeDuration: 0.4
   playOnEnable: 1
   destroyOnFinish: 1
+  shrinkAfterFade: 0
 --- !u!23 &6336698552131311569 stripped
 MeshRenderer:
   m_CorrespondingSourceObject: {fileID: -7511558181221131132, guid: acdc946ac6cb8b042b203468a0e728ff, type: 3}

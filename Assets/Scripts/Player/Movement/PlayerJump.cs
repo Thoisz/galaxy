@@ -31,12 +31,12 @@ public class PlayerJump : MonoBehaviour
     [SerializeField] private AudioClip _airJumpSound;
     [SerializeField] private float _jumpSoundVolume = 0.5f;
 
-    // ── External suppression gate (set by JetpackBoostJump)
+        // ── External suppression gate (set by BoostJump / other systems)
     [SerializeField] private bool _jumpSuppressed = false;
     public  void SetJumpSuppressed(bool value) => _jumpSuppressed = value;
     public  bool IsJumpSuppressed => _jumpSuppressed;
 
-    [SerializeField] private PlayerCrouch _playerCrouch;     // to read IsCrouching
+    // Boost jump reference (no separate crouch script anymore)
     private BoostJump _boostJump;
 
     // Private fields
@@ -67,14 +67,15 @@ public class PlayerJump : MonoBehaviour
     // Air jump animation tracking
     private int _airJumpSide = 0; // 0 = left, 1 = right
 
-    private void Start()
+        private void Start()
     {
         // Get components
-        _rigidbody = GetComponent<Rigidbody>();
+        _rigidbody   = GetComponent<Rigidbody>();
         _gravityBody = GetComponent<GravityBody>();
 
-        if (_playerCrouch == null) _playerCrouch = GetComponent<PlayerCrouch>();
-        if (_boostJump == null)    _boostJump    = GetComponentInChildren<BoostJump>(true);
+        // Ensure booster ref if present
+        if (_boostJump == null)
+            _boostJump = GetComponentInChildren<BoostJump>(true);
         
         // Find player movement script if not assigned
         if (_playerMovement == null)
@@ -94,9 +95,9 @@ public class PlayerJump : MonoBehaviour
         if (_firstJumpSound != null || _doubleJumpSound != null || _airJumpSound != null)
         {
             _audioSource = gameObject.AddComponent<AudioSource>();
-            _audioSource.playOnAwake = false;
-            _audioSource.spatialBlend = 1.0f;
-            _audioSource.volume = _jumpSoundVolume;
+            _audioSource.playOnAwake   = false;
+            _audioSource.spatialBlend  = 1.0f;
+            _audioSource.volume        = _jumpSoundVolume;
         }
         
         // Initialize remaining air jumps

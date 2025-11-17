@@ -5,23 +5,63 @@ using UnityEngine.Rendering; // for RenderQueue, BlendMode
 [DisallowMultipleComponent]
 public class GroundbreakFXRoot : MonoBehaviour
 {
-    [Header("Optional: assign explicitly (otherwise auto-find)")]
-    [SerializeField] private MeshRenderer      slabRenderer; // fallback single renderer on the slab ring
-    [SerializeField] private SlabRingSimpleFX  slabFx;       // preferred: driver that can apply/fade material
+    // ─────────────────────────────────────────────────────────────
+    // Basic slab FX & inheritance
+    // ─────────────────────────────────────────────────────────────
+    [Header("Slab FX (auto-find if empty)")]
+    [SerializeField] private MeshRenderer     slabRenderer; // main ring mesh
+    [SerializeField] private SlabRingSimpleFX slabFx;       // driver that handles scaling/fading
 
     [Header("Extra Particles (optional)")]
     [SerializeField] private List<ParticleSystem> extraParticles = new List<ParticleSystem>();
 
     [Header("Material Inheritance")]
-    [Tooltip("Try to copy the ground's material at the contact point.")]
+    [Tooltip("Copy the ground's material at the contact point onto the slabs.")]
     [SerializeField] private bool inheritGroundMaterial = true;
 
-    [Tooltip("If ON and ground uses URP/Lit, we’ll clone it and force Transparent so the slab fade works.")]
+    [Tooltip("If the ground is URP/Lit, clone it and force transparent so fading works.")]
     [SerializeField] private bool forceTransparentForURP = true;
 
     [Tooltip("Which slab material slot to replace on the fallback renderer. -1 = ALL slots.")]
     [SerializeField] private int slabMaterialIndex = -1;
 
+    // ─────────────────────────────────────────────────────────────
+    // Spook planet (vertex-control map) support
+    // ─────────────────────────────────────────────────────────────
+    [System.Serializable]
+    public class SpookSettings
+    {
+        [Tooltip("Enable the special Spook_VertexShading handling for slabs.")]
+        public bool enableSpookStyle = true;
+
+        [Tooltip("Assign the 'Shader Graphs/Spook_VertexShading' shader here.")]
+        public Shader spookShader;
+
+        [Tooltip("If true, only the selected texture slot stays at strength 1; the others are set to 0.")]
+        public bool zeroOtherStrengths = true;
+    }
+
+    [Header("Spook Planet Style")]
+    [SerializeField] private SpookSettings spook = new SpookSettings();
+
+    // internal constants for Spook shader property names
+    private const string SPOOK_SHADER_NAME_FALLBACK = "Shader Graphs/Spook_VertexShading";
+    private const string SPOOK_CONTROL_PROP         = "_ControlMap";
+
+    // Base textures & strengths are fixed in your graph, so we hardcode names here
+    private static readonly string[] SPOOK_BASE_TEX_PROPS =
+    {
+        "_BaseTextA", "_BaseTextB", "_BaseTextC", "_BaseTextD", "_BaseTextE"
+    };
+
+    private static readonly string[] SPOOK_BASE_STRENGTH_PROPS =
+    {
+        "_BaseStrengthA", "_BaseStrengthB", "_BaseStrengthC", "_BaseStrengthD", "_BaseStrengthE"
+    };
+
+    // ─────────────────────────────────────────────────────────────
+    // Raycast + rubble tint
+    // ─────────────────────────────────────────────────────────────
     [Header("Raycast Sampling")]
     [Tooltip("Layers to consider as ground.")]
     [SerializeField] private LayerMask groundMask = ~0;
@@ -32,17 +72,29 @@ public class GroundbreakFXRoot : MonoBehaviour
     [Tooltip("Vertical offset upward before we cast down (helps when spawning very close to the floor).")]
     [SerializeField] private float rayStartUpOffset = 0.25f;
 
-    [Tooltip("If ON, draw a debug ray and log what we hit.")]
+    [Tooltip("If ON, draw debug rays and log info.")]
     [SerializeField] private bool debugLogs = false;
 
-    [Header("Rubble Color (optional)")]
-    [SerializeField] private List<ParticleSystem> rubbleParticles = new List<ParticleSystem>();
-    [SerializeField] private List<Renderer>       rubbleRenderers = new List<Renderer>();
-    [SerializeField] private bool                 rubbleAffectsMaterialColor = true; // sets _BaseColor/_Color/_TintColor on particle materials too
+    [Header("Rubble Tint (optional)")]
+    [SerializeField] private List<ParticleSystem> rubbleParticles  = new List<ParticleSystem>();
+    [SerializeField] private List<Renderer>       rubbleRenderers  = new List<Renderer>();
+    [SerializeField] private bool                 rubbleAffectsMaterialColor = true;
 
     // cache
     private Material[] _defaultSlabMats;
 
+    // small cached uniform control-map textures for regions
+    private static Texture2D _controlRed;
+    private static Texture2D _controlGreen;
+    private static Texture2D _controlBlue;
+    private static Texture2D _controlWhite;
+    private static Texture2D _controlBlack;
+
+    private enum Region { Red = 0, Green = 1, Blue = 2, White = 3, Black = 4 }
+
+    // ─────────────────────────────────────────────────────────────
+    // Lifecycle
+    // ─────────────────────────────────────────────────────────────
     private void Awake()
     {
         AutoBindIfNeeded();
@@ -52,26 +104,24 @@ public class GroundbreakFXRoot : MonoBehaviour
 
     private void OnEnable()
     {
-        // Drive FX play
         if (slabFx != null) slabFx.Play();
         foreach (var ps in extraParticles) if (ps) ps.Play(true);
     }
 
     /// <summary>
     /// Call this right after Instantiate. 'origin' ~ player feet; 'up' is your gravity up.
-    /// This also tries to inherit the hit material.
+    /// This also tries to inherit the hit material and tint rubble.
     /// </summary>
     public void ConfigureFromContact(Vector3 origin, Vector3 up)
     {
         AutoBindIfNeeded();
 
-        // 1) Find ground directly beneath the given origin
         Vector3 start = origin + up * rayStartUpOffset;
         Vector3 dir   = -up;
 
         if (Physics.Raycast(start, dir, out RaycastHit hit, rayDownDistance, groundMask, QueryTriggerInteraction.Ignore))
         {
-            // Place the FX on the contact point and align its up to the ground normal
+            // Position/align to ground
             transform.position = hit.point;
             transform.rotation = Quaternion.FromToRotation(Vector3.up, hit.normal);
 
@@ -81,13 +131,21 @@ public class GroundbreakFXRoot : MonoBehaviour
                 Debug.Log($"[GroundbreakFXRoot] Hit '{hit.collider.name}' at {hit.point}", this);
             }
 
-            // 2) Inherit the ground's material for the slab ring (optional)
+            // Inherit ground material (with Spook special case)
             if (inheritGroundMaterial && slabRenderer != null)
             {
                 var srcMat = TryGetGroundMaterial(hit);
                 if (srcMat != null)
                 {
-                    ApplyMaterialToSlabs(srcMat);
+                    Material toApply = srcMat;
+
+                    if (spook.enableSpookStyle && IsSpookShader(srcMat))
+                    {
+                        if (TryCreateSpookSlabMaterial(srcMat, hit, out Material spookMat))
+                            toApply = spookMat;
+                    }
+
+                    ApplyMaterialToSlabs(toApply);
                 }
                 else if (debugLogs)
                 {
@@ -95,9 +153,8 @@ public class GroundbreakFXRoot : MonoBehaviour
                 }
             }
 
-            // 3) Sample a representative color from the ground and tint rubble with it (optional)
-            Color groundCol;
-            if (TrySampleGroundColor(out groundCol))
+            // Tint rubble from ground colour
+            if (TrySampleGroundColor(out Color groundCol))
             {
                 ApplyColorToRubble(groundCol);
                 if (debugLogs) Debug.Log($"[GroundbreakFXRoot] Rubble color set to {groundCol}", this);
@@ -105,7 +162,6 @@ public class GroundbreakFXRoot : MonoBehaviour
         }
         else
         {
-            // No ground below; keep current transform but log/debug draw
             if (debugLogs)
             {
                 Debug.DrawRay(start, dir * rayDownDistance, Color.red, 1.5f);
@@ -113,14 +169,14 @@ public class GroundbreakFXRoot : MonoBehaviour
             }
         }
 
-        // 4) Kick off the visual effects
+        // Kick FX
         if (slabFx != null) slabFx.Play();
-        foreach (var ps in extraParticles)
-            if (ps) ps.Play(true);
+        foreach (var ps in extraParticles) if (ps) ps.Play(true);
     }
 
-    // ─────────────────────────── helpers ───────────────────────────
-
+    // ─────────────────────────────────────────────────────────────
+    // Core helpers
+    // ─────────────────────────────────────────────────────────────
     private void AutoBindIfNeeded()
     {
         if (!slabFx)       slabFx       = GetComponentInChildren<SlabRingSimpleFX>(true);
@@ -157,20 +213,20 @@ public class GroundbreakFXRoot : MonoBehaviour
         return null;
     }
 
-    void ApplyMaterialToSlabs(Material src)
+    // Generic path: assign or clone → slabs
+    private void ApplyMaterialToSlabs(Material src)
     {
         if (slabRenderer == null || src == null) return;
 
-        // Clone if we need a transparent URP Lit for fading.
         Material toAssign = src;
-        bool isURPLit = src.shader != null && src.shader.name.Contains("Universal Render Pipeline/Lit");
-        if (forceTransparentForURP && isURPLit)
+
+        if (forceTransparentForURP && IsURPLit(src))
         {
             toAssign = new Material(src) { name = src.name + " (FX Clone)" };
             ForceURPLitTransparent(toAssign);
         }
 
-        // Preferred path: let the FX script handle instance + transparency + MPB refresh
+        // Preferred: route via SlabRingSimpleFX
         if (slabFx != null)
         {
             slabFx.ApplyMaterial(toAssign);
@@ -179,7 +235,7 @@ public class GroundbreakFXRoot : MonoBehaviour
             return;
         }
 
-        // Fallback: assign directly on the renderer…
+        // Fallback: directly assign to renderer
         var mats = slabRenderer.materials; // instances
         if (mats == null || mats.Length == 0) return;
 
@@ -193,7 +249,6 @@ public class GroundbreakFXRoot : MonoBehaviour
         }
         slabRenderer.materials = mats;
 
-        // …and clear ALL property blocks so old _BaseColor MPB tints don’t override the new material
         slabRenderer.SetPropertyBlock(null);
 #if UNITY_2021_2_OR_NEWER
         for (int s = 1; s < slabRenderer.sharedMaterials.Length; s++)
@@ -204,19 +259,176 @@ public class GroundbreakFXRoot : MonoBehaviour
             Debug.Log($"[GroundbreakFXRoot] Applied '{toAssign.name}' directly to slabRenderer (fallback path).", this);
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // Spook style support
+    // ─────────────────────────────────────────────────────────────
+    private bool IsSpookShader(Material m)
+    {
+        if (!m || m.shader == null) return false;
+
+        // Prefer direct shader reference if provided
+        if (spook.spookShader && m.shader == spook.spookShader)
+            return true;
+
+        // Fallback by name
+        string shaderName = m.shader.name;
+        if (!string.IsNullOrEmpty(shaderName) &&
+            shaderName.IndexOf(SPOOK_SHADER_NAME_FALLBACK, System.StringComparison.OrdinalIgnoreCase) >= 0)
+            return true;
+
+        return false;
+    }
+
+    private bool TryCreateSpookSlabMaterial(Material src, RaycastHit hit, out Material slabMat)
+    {
+        slabMat = null;
+        if (src == null || src.shader == null) return false;
+
+        var controlTex = src.GetTexture(SPOOK_CONTROL_PROP) as Texture2D;
+        if (controlTex == null || !controlTex.isReadable)
+        {
+            if (debugLogs)
+                Debug.LogWarning($"[GroundbreakFXRoot] Spook material '{src.name}' has no readable {SPOOK_CONTROL_PROP}.", this);
+            return false;
+        }
+
+        // Sample control map at hit UV
+        Vector2 uv = hit.textureCoord;
+        Color c = controlTex.GetPixelBilinear(uv.x, uv.y);
+
+        Region region = GetNearestRegion(c);
+        int regionIndex = (int)region;
+        if (regionIndex < 0 || regionIndex >= SPOOK_BASE_TEX_PROPS.Length)
+            return false;
+
+        string texProp = SPOOK_BASE_TEX_PROPS[regionIndex];
+        Texture baseTex = src.HasProperty(texProp) ? src.GetTexture(texProp) : null;
+        if (baseTex == null)
+        {
+            if (debugLogs)
+                Debug.LogWarning($"[GroundbreakFXRoot] Spook material '{src.name}' has no texture assigned on '{texProp}'.", this);
+            return false;
+        }
+
+        // Clone
+        slabMat = new Material(src) { name = src.name + $" (Spook Slab {region})" };
+
+        // Replace control map with uniform map for this channel
+        slabMat.SetTexture(SPOOK_CONTROL_PROP, GetUniformControlTexture(region));
+
+        // Optionally zero strengths for non-selected slots
+        if (spook.zeroOtherStrengths)
+        {
+            for (int i = 0; i < SPOOK_BASE_STRENGTH_PROPS.Length; i++)
+            {
+                string prop = SPOOK_BASE_STRENGTH_PROPS[i];
+                if (!slabMat.HasProperty(prop)) continue;
+                slabMat.SetFloat(prop, i == regionIndex ? 1f : 0f);
+            }
+        }
+
+        if (debugLogs)
+        {
+            Debug.Log($"[GroundbreakFXRoot] Created Spook slab material '{slabMat.name}' from '{src.name}', region={region}, texProp={texProp}.", this);
+        }
+
+        return true;
+    }
+
+    private Region GetNearestRegion(Color c)
+    {
+        Vector3 v = new Vector3(c.r, c.g, c.b);
+
+        float best = float.MaxValue;
+        Region bestRegion = Region.Red;
+
+        void Consider(Region r, Color target)
+        {
+            Vector3 t = new Vector3(target.r, target.g, target.b);
+            float d = (v - t).sqrMagnitude;
+            if (d < best)
+            {
+                best = d;
+                bestRegion = r;
+            }
+        }
+
+        Consider(Region.Red,   Color.red);
+        Consider(Region.Green, Color.green);
+        Consider(Region.Blue,  Color.blue);
+        Consider(Region.White, Color.white);
+        Consider(Region.Black, Color.black);
+
+        return bestRegion;
+    }
+
+    private Texture2D GetUniformControlTexture(Region region)
+    {
+        Color col = region switch
+        {
+            Region.Red   => Color.red,
+            Region.Green => Color.green,
+            Region.Blue  => Color.blue,
+            Region.White => Color.white,
+            Region.Black => Color.black,
+            _ => Color.red
+        };
+
+        switch (region)
+        {
+            case Region.Red:
+                if (_controlRed == null)   _controlRed   = CreateUniformControlTexture(col);
+                return _controlRed;
+            case Region.Green:
+                if (_controlGreen == null) _controlGreen = CreateUniformControlTexture(col);
+                return _controlGreen;
+            case Region.Blue:
+                if (_controlBlue == null)  _controlBlue  = CreateUniformControlTexture(col);
+                return _controlBlue;
+            case Region.White:
+                if (_controlWhite == null) _controlWhite = CreateUniformControlTexture(col);
+                return _controlWhite;
+            case Region.Black:
+                if (_controlBlack == null) _controlBlack = CreateUniformControlTexture(col);
+                return _controlBlack;
+        }
+
+        if (_controlRed == null) _controlRed = CreateUniformControlTexture(Color.red);
+        return _controlRed;
+    }
+
+    private static Texture2D CreateUniformControlTexture(Color c)
+    {
+        const int size = 4;
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            name      = $"SpookControl_{c}",
+            wrapMode  = TextureWrapMode.Repeat,
+            filterMode = FilterMode.Bilinear
+        };
+
+        Color[] pixels = new Color[size * size];
+        for (int i = 0; i < pixels.Length; i++) pixels[i] = c;
+        tex.SetPixels(pixels);
+        tex.Apply();
+        return tex;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // URP Lit helpers
+    // ─────────────────────────────────────────────────────────────
     private static bool IsURPLit(Material m)
     {
         var sh = m.shader;
         if (!sh) return false;
-        // Covers “Universal Render Pipeline/Lit” and variants
+
         return sh.name.IndexOf("Universal Render Pipeline", System.StringComparison.OrdinalIgnoreCase) >= 0
             && sh.name.IndexOf("Lit", System.StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
-    // Make a URP/Lit material transparent so alpha fading works
     private static void ForceURPLitTransparent(Material m)
     {
-        if (m.HasProperty("_Surface"))   m.SetFloat("_Surface", 1f); // 1 = Transparent
+        if (m.HasProperty("_Surface"))   m.SetFloat("_Surface", 1f); // Transparent
         if (m.HasProperty("_AlphaClip")) m.SetFloat("_AlphaClip", 0f);
         if (m.HasProperty("_ZWrite"))    m.SetFloat("_ZWrite", 0f);
         if (m.HasProperty("_SrcBlend"))  m.SetFloat("_SrcBlend", (float)BlendMode.SrcAlpha);
@@ -228,21 +440,21 @@ public class GroundbreakFXRoot : MonoBehaviour
         m.SetOverrideTag("RenderType", "Transparent");
     }
 
-    // Try to get a representative color from the ground under this FX root.
-    // Prefers material color; if there’s a base/diffuse texture and UVs, samples it too.
-    bool TrySampleGroundColor(out Color result)
+    // ─────────────────────────────────────────────────────────────
+    // Rubble tinting (same as before, just kept)
+    // ─────────────────────────────────────────────────────────────
+    private bool TrySampleGroundColor(out Color result)
     {
         result = Color.white;
 
-        // Cast straight down from our FX root to re-acquire a fresh hit (in case ConfigureFromContact moved us)
-        Vector3 up = transform.up;
+        Vector3 up    = transform.up;
         Vector3 start = transform.position + up * 0.1f;
-        Vector3 dir = -up;
+        Vector3 dir   = -up;
 
         if (!Physics.Raycast(start, dir, out RaycastHit hit, rayDownDistance, groundMask, QueryTriggerInteraction.Ignore))
             return false;
 
-        // 1) Terrain
+        // Terrain
         var terrain = hit.collider.GetComponentInParent<Terrain>();
         if (terrain != null && terrain.terrainData != null)
         {
@@ -258,7 +470,7 @@ public class GroundbreakFXRoot : MonoBehaviour
             int best = 0; float bestW = 0f;
             for (int l = 0; l < td.alphamapLayers; l++)
             {
-                float w = alpha[0,0,l];
+                float w = alpha[0, 0, l];
                 if (w > bestW) { bestW = w; best = l; }
             }
 
@@ -275,7 +487,10 @@ public class GroundbreakFXRoot : MonoBehaviour
                 Color texCol = Color.white;
                 if (layer.diffuseTexture != null)
                 {
-                    Vector2 tileSize = layer.tileSize; if (tileSize.x <= 0f) tileSize.x = 1f; if (tileSize.y <= 0f) tileSize.y = 1f;
+                    Vector2 tileSize = layer.tileSize;
+                    if (tileSize.x <= 0f) tileSize.x = 1f;
+                    if (tileSize.y <= 0f) tileSize.y = 1f;
+
                     Vector2 uvLayer = new Vector2(local.x / tileSize.x, local.z / tileSize.y) + layer.tileOffset;
 
                     var tex = layer.diffuseTexture as Texture2D;
@@ -296,7 +511,7 @@ public class GroundbreakFXRoot : MonoBehaviour
             return false;
         }
 
-        // 2) Mesh / Static objects
+        // Mesh / static objects
         var rend = hit.collider.GetComponentInParent<Renderer>();
         if (rend != null)
         {
@@ -324,7 +539,7 @@ public class GroundbreakFXRoot : MonoBehaviour
         return false;
     }
 
-    void ApplyColorToRubble(Color c)
+    private void ApplyColorToRubble(Color c)
     {
         foreach (var ps in rubbleParticles)
         {
@@ -353,9 +568,8 @@ public class GroundbreakFXRoot : MonoBehaviour
         }
     }
 
-    // --- tiny utilities ---
-
-    static Color ReadAnyColorProperty(Material m, Color fallback)
+    // tiny utilities
+    private static Color ReadAnyColorProperty(Material m, Color fallback)
     {
         if (!m) return fallback;
         if (m.HasProperty("_BaseColor")) return m.GetColor("_BaseColor");
@@ -364,7 +578,7 @@ public class GroundbreakFXRoot : MonoBehaviour
         return fallback;
     }
 
-    static Texture GetAnyBaseTexture(Material m)
+    private static Texture GetAnyBaseTexture(Material m)
     {
         if (!m) return null;
         if (m.HasProperty("_BaseMap"))      return m.GetTexture("_BaseMap");
@@ -373,7 +587,7 @@ public class GroundbreakFXRoot : MonoBehaviour
         return null;
     }
 
-    static Color MultiplySRGB(Color a, Color b)
+    private static Color MultiplySRGB(Color a, Color b)
     {
         return new Color(a.r * b.r, a.g * b.g, a.b * b.b, a.a * b.a);
     }
